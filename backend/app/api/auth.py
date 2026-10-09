@@ -257,26 +257,30 @@ async def login_user(request: UserLoginRequest, response: Response, db: Session 
 
 @router.post("/google", response_model=TokenResponse)
 async def google_auth(request: GoogleAuthRequest, response: Response, db: Session = Depends(get_db)):
-    """Authenticate or register user via Google OAuth 2.0. Requires OTP verification for first-time users."""
+    """Authenticate or register user via Google OAuth 2.0. Google verifies user email identity directly."""
     email_clean = request.email.lower().strip()
     user_doc, user = await _get_user_by_email(email_clean, db)
     name = request.name.strip() if request.name else email_clean.split("@")[0]
 
-    if not user_doc and not user:
-        # First-time Google user - initiate OTP verification
-        otp = generate_otp_code()
-        expires = datetime.now(timezone.utc) + timedelta(minutes=10)
-        pwd = hash_password(f"GoogleOAuth2Secured_{email_clean}")
-        user_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    if user_doc is not None:
+        user_id = _get_str(user_doc.id)
+    elif user is not None:
+        user_id = _get_str(user.id)
+
+    pwd = hash_password(f"GoogleOAuth2Secured_{email_clean}")
+
+    if user_doc is None and user is None:
+        # Create new verified Google user in MongoDB and SQL DB
         try:
             user_doc = UserDoc(
                 id=user_id,
                 name=name,
                 email=email_clean,
                 password_hash=pwd,
-                is_verified=False,
-                otp_code=otp,
-                otp_expires_at=expires
+                is_verified=True,
+                otp_code=None,
+                otp_expires_at=None
             )
             await user_doc.insert()
         except Exception:
@@ -288,48 +292,27 @@ async def google_auth(request: GoogleAuthRequest, response: Response, db: Sessio
                 name=name,
                 email=email_clean,
                 password_hash=pwd,
-                is_verified=False,
-                otp_code=otp,
-                otp_expires_at=expires
+                is_verified=True,
+                otp_code=None,
+                otp_expires_at=None
             )
             db.add(user)
             db.commit()
             db.refresh(user)
         except Exception:
             pass
-
-        return TokenResponse(
-            require_otp=True,
-            otp_sent_to=email_clean,
-            demo_otp=otp,
-            user=UserOut(id=user_id, name=name, email=email_clean, is_verified=False, created_at=datetime.now(timezone.utc))
-        )
+    else:
+        # Update existing user to is_verified=True
+        if user_doc is not None and not user_doc.is_verified:
+            user_doc.is_verified = True
+            await user_doc.save()
+        if user is not None and not _get_bool(user.is_verified):
+            setattr(user, "is_verified", True)
+            db.commit()
 
     user_obj = user_doc if user_doc is not None else user
-    assert user_obj is not None
-
-    is_verified = _get_bool(user_obj.is_verified)
-    user_id = _get_str(user_obj.id)
-    user_name = _get_str(user_obj.name) or name
-    created_at = _get_dt(user_obj.created_at)
-
-    if not is_verified:
-        otp = generate_otp_code()
-        exp = datetime.now(timezone.utc) + timedelta(minutes=10)
-        if user_doc is not None:
-            user_doc.otp_code = otp
-            user_doc.otp_expires_at = exp
-            await user_doc.save()
-        if user is not None:
-            setattr(user, "otp_code", otp)
-            setattr(user, "otp_expires_at", exp)
-            db.commit()
-        return TokenResponse(
-            require_otp=True,
-            otp_sent_to=email_clean,
-            demo_otp=otp,
-            user=UserOut(id=user_id, name=user_name, email=email_clean, is_verified=False, created_at=created_at)
-        )
+    user_name = _get_str(getattr(user_obj, "name", None)) or name
+    created_at = _get_dt(getattr(user_obj, "created_at", None)) if user_obj else datetime.now(timezone.utc)
 
     access_token = create_access_token({"sub": user_id, "email": email_clean})
     refresh_token = create_refresh_token({"sub": user_id, "email": email_clean})

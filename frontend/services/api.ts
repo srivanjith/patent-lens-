@@ -136,16 +136,15 @@ export const api = {
       const email = payload.email || "googleuser@gmail.com";
       const name = payload.name || email.split("@")[0];
       data = {
-        require_otp: true,
-        otp_sent_to: email,
-        demo_otp: "123456",
+        access_token: `token_google_${Date.now()}`,
+        token_type: "bearer",
+        require_otp: false,
         user: { id: `user_${Date.now()}`, email, name, created_at: new Date().toISOString() }
       };
     }
-    if (data.access_token && !data.require_otp) {
-      setStoredToken(data.access_token);
-      if (data.user) saveUserData(data.user);
-    }
+    const token = data.access_token || `token_google_${Date.now()}`;
+    setStoredToken(token);
+    if (data.user) saveUserData(data.user);
     return data;
   },
 

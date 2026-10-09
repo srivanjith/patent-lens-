@@ -354,33 +354,6 @@ export default function AuthPageDesign({
       console.warn("Backend Google Auth notice:", apiErr?.message);
     }
 
-    // Check if new user requiring OTP verification
-    if (authRes?.require_otp) {
-      const activeOtpCode =
-        authRes.demo_otp && String(authRes.demo_otp).length === 6
-          ? String(authRes.demo_otp)
-          : Math.floor(100000 + Math.random() * 900000).toString();
-
-      setOtpTargetEmail(authRes.otp_sent_to || userEmail);
-      setDemoOTP(activeOtpCode);
-      setShowOTPModal(true);
-
-      if (typeof window !== "undefined") {
-        localStorage.setItem("patentlens_user_email", userEmail);
-        localStorage.setItem("patentlens_user_name", fullName);
-      }
-
-      sendOTPEmail({
-        toEmail: authRes.otp_sent_to || userEmail,
-        toName: fullName,
-        otpCode: activeOtpCode,
-      }).catch(() => {});
-
-      setLoading(false);
-      setSuccessMsg(`Google account detected! Verification OTP code sent to ${userEmail}.`);
-      return;
-    }
-
     if (typeof window !== "undefined") {
       localStorage.setItem("patentlens_user_email", userEmail);
       localStorage.setItem("patentlens_user_name", fullName);
@@ -391,7 +364,7 @@ export default function AuthPageDesign({
 
     setIsSuccess(true);
     setSuccessMsg(`Welcome, ${fullName}! Google sign-in successful...`);
-    setTimeout(() => router.push("/dashboard"), 500);
+    setTimeout(() => router.push("/dashboard"), 300);
     setLoading(false);
   };
 
