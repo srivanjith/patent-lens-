@@ -396,8 +396,8 @@ def perform_prior_art_search(
     except ImportError:
         from app.schemas.schemas import ScoreBreakdown, PipelineMetrics, PatentFamilyMember
 
-    pat_searched_val = int(pat_searched or 0)
-    pat_retrieved_val = int(pat_retrieved or 0)
+    pat_searched_val = pat_searched
+    pat_retrieved_val = pat_retrieved
 
     pipeline_metrics = PipelineMetrics(
         patents_searched=pat_searched_val,
@@ -565,7 +565,7 @@ def perform_prior_art_search(
         # Calculate Temporal Status according to Phase 16
         p_date = str(pat.publication_date or "").strip()[:10]
         prio_date = str(getattr(pat, "earliest_priority_date", "") or p_date).strip()[:10]
-        r_date = str(request.reference_date or "").strip()[:10] if request.reference_date else ""
+        r_date = request.reference_date.strip()[:10] if request.reference_date else ""
 
         if not r_date:
             temporal_status = "DATE_UNAVAILABLE"
@@ -1212,7 +1212,7 @@ async def delete_search_record(
         from app.models.models import SearchDoc
         search_doc = await SearchDoc.find_one(SearchDoc.id == search_id)
         if search_doc:
-            if str(search_doc.user_id) != str(current_user.id):
+            if search_doc.user_id != current_user.id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized access.")
             await search_doc.delete()
             deleted = True
@@ -1224,7 +1224,7 @@ async def delete_search_record(
     if db:
         search = db.query(Search).filter(Search.id == search_id).first()
         if search:
-            if str(search.user_id) != str(current_user.id):
+            if search.user_id != current_user.id:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized access.")
             db.delete(search)
             db.commit()

@@ -1,6 +1,7 @@
 import os
 import uuid
 import tempfile
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
@@ -156,12 +157,13 @@ def generate_pdf_report(search: Search, results: list) -> str:
         ]
     ]
 
-    def _get_val(obj, key, default=""):
+    def _get_val(obj: Any, key: str, default: Any = "") -> Any:
         if obj is None:
             return default
         if isinstance(obj, dict):
             return obj.get(key, default)
-        return getattr(obj, key, default) if getattr(obj, key, default) is not None else default
+        val = getattr(obj, key, default)
+        return val if val is not None else default
 
     for item in results[:5]:
         pat = _get_val(item, "patent", None)
