@@ -252,7 +252,7 @@ async function handleMockFallback(subPath: string, req: NextRequest) {
     }
   }
 
-  if (req.method === "GET" && cleanPath.startsWith("search/")) {
+  if (cleanPath.startsWith("search/")) {
     const parts = cleanPath.split("/");
     const id = parts[1];
     if (id === "history") {
@@ -266,6 +266,12 @@ async function handleMockFallback(subPath: string, req: NextRequest) {
         total_results: s.summary?.total_results || 4,
       }));
       return NextResponse.json(historyItems);
+    }
+    if (req.method === "DELETE") {
+      if (mockSearchStore.has(id)) {
+        mockSearchStore.delete(id);
+      }
+      return NextResponse.json({ success: true, message: "Search record successfully deleted." });
     }
     if (mockSearchStore.has(id)) {
       return NextResponse.json(mockSearchStore.get(id));
@@ -281,15 +287,33 @@ async function handleMockFallback(subPath: string, req: NextRequest) {
   }
 
   if (cleanPath.startsWith("reports")) {
+    const parts = cleanPath.split("/");
     if (req.method === "POST") {
-      const parts = cleanPath.split("/");
       const searchId = parts[1] || "demo-search";
       return NextResponse.json({
         id: `report-${Date.now()}`,
         search_id: searchId,
-        report_path: "/dummy.pdf",
+        report_path: `/reports/demo-${searchId}.pdf`,
         created_at: new Date().toISOString()
-      });
+      }, { status: 201 });
+    }
+    if (req.method === "GET") {
+      if (parts.length > 2 && parts[2] === "download") {
+        const reportId = parts[1] || "demo-report";
+        return NextResponse.json({
+          message: `Demonstration Mode: PDF report ${reportId} prepared. Backend service offline.`,
+          report_id: reportId,
+          status: "DEMO_DOWNLOAD"
+        });
+      }
+      return NextResponse.json([
+        {
+          id: "report-demo-1",
+          search_id: "search_demo_01",
+          report_path: "/reports/demo-search_demo_01.pdf",
+          created_at: new Date(Date.now() - 3600000).toISOString()
+        }
+      ]);
     }
     return NextResponse.json([]);
   }
