@@ -294,13 +294,40 @@ async function handleMockFallback(subPath: string, req: NextRequest) {
     return NextResponse.json([]);
   }
 
-  if (cleanPath.startsWith("auth/me")) {
+  if (cleanPath.startsWith("auth/")) {
+    let body: any = {};
+    try {
+      if (req.method === "POST" || req.method === "PUT") {
+        body = await req.json().catch(() => ({}));
+      }
+    } catch {}
+
+    const email = body?.email || "inventor@startup.com";
+    const rawName = body?.name || email.split("@")[0].replace(/[^a-zA-Z0-9]/g, " ");
+    const name = rawName ? (rawName.charAt(0).toUpperCase() + rawName.slice(1)) : "Inventor";
+    const token = `token_auth_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    if (cleanPath.startsWith("auth/me")) {
+      return NextResponse.json({
+        id: `user_${email.replace(/[^a-zA-Z0-9]/g, "_")}`,
+        email: email,
+        name: name,
+        created_at: new Date().toISOString(),
+        search_count: 5
+      });
+    }
+
     return NextResponse.json({
-      id: "user-inventor",
-      email: "inventor@startup.com",
-      name: "Inventor User",
-      created_at: new Date().toISOString(),
-      search_count: 5
+      access_token: token,
+      token_type: "bearer",
+      require_otp: false,
+      user: {
+        id: `user_${email.replace(/[^a-zA-Z0-9]/g, "_")}`,
+        email: email,
+        name: name,
+        created_at: new Date().toISOString(),
+        search_count: 5
+      }
     });
   }
 
