@@ -305,14 +305,11 @@ export default function AuthPageDesign({
 
       if (errCode === "auth/unauthorized-domain" || errMsg.includes("unauthorized-domain") || errCode === "auth/popup-closed-by-user") {
         if (!userEmail || !userEmail.includes("@")) {
-          const promptEmail = typeof window !== "undefined" ? window.prompt("Firebase Domain Notice: Please enter your Google email address to complete sign in:", "user@gmail.com") : null;
-          if (promptEmail && promptEmail.includes("@")) {
-            userEmail = promptEmail.trim().toLowerCase();
-          } else {
-            setError("Sign-In cancelled. Please enter your email address.");
-            setLoading(false);
-            return;
-          }
+          setError("Please enter your email address in the Email field above to sign in with Google.");
+          setFocusedField("email");
+          triggerErrorEffects();
+          setLoading(false);
+          return;
         }
         if (!fullName) {
           fullName = userEmail.split("@")[0].replace(/[^a-zA-Z0-9]/g, " ");
