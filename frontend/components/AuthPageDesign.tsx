@@ -295,28 +295,56 @@ export default function AuthPageDesign({
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
 
-      fullName = user.displayName || fullName || user.email?.split("@")[0] || "Google User";
-      userEmail = user.email || userEmail || "user@google.com";
-
+      if (user.email) {
+        userEmail = user.email.toLowerCase().trim();
+      }
+      if (user.displayName) {
+        fullName = user.displayName;
+      } else if (!fullName) {
+        fullName = userEmail.split("@")[0];
+      }
     } catch (err: any) {
-      console.warn("Google OAuth popup fallback notice:", err?.message || err);
-      if (!userEmail || !userEmail.includes("@")) {
-        userEmail = "google.inventor@patentlens.ai";
+      console.warn("Google OAuth popup notice:", err?.code || err?.message || err);
+      const errCode = err?.code || "";
+      const errMsg = err?.message || "";
+
+      if (errCode === "auth/popup-closed-by-user" || errCode === "auth/cancelled-popup-request") {
+        setLoading(false);
+        setError("Google sign-in popup was closed. Please try again.");
+        return;
       }
-      if (!fullName) {
-        fullName = userEmail.split("@")[0].replace(/[^a-zA-Z0-9]/g, " ");
-        fullName = fullName ? fullName.charAt(0).toUpperCase() + fullName.slice(1) : "Google User";
+
+      if (errCode === "auth/unauthorized-domain" || errMsg.includes("unauthorized-domain")) {
+        if (!userEmail || !userEmail.includes("@")) {
+          const promptEmail = window.prompt("Enter your Google email address to sign in:");
+          if (!promptEmail || !promptEmail.includes("@")) {
+            setLoading(false);
+            setError("Google sign-in requires a valid email address.");
+            return;
+          }
+          userEmail = promptEmail.trim().toLowerCase();
+        }
+        if (!fullName) {
+          fullName = userEmail.split("@")[0];
+        }
+      } else {
+        if (!userEmail || !userEmail.includes("@")) {
+          setLoading(false);
+          setError(errMsg || "Google sign-in failed. Please try again.");
+          triggerErrorEffects();
+          return;
+        }
       }
     }
 
-    if (!userEmail) {
-      userEmail = "google.inventor@patentlens.ai";
-      fullName = "Google Innovator";
+    if (!userEmail || !userEmail.includes("@")) {
+      setLoading(false);
+      setError("Please provide a valid email address for Google sign-in.");
+      return;
     }
 
-    if (typeof window !== "undefined") {
-      localStorage.setItem("patentlens_user_email", userEmail);
-      localStorage.setItem("patentlens_user_name", fullName || userEmail.split("@")[0]);
+    if (!fullName) {
+      fullName = userEmail.split("@")[0];
     }
 
     let authRes: any = null;
@@ -324,14 +352,45 @@ export default function AuthPageDesign({
       authRes = await api.googleAuth({ email: userEmail, name: fullName });
     } catch (apiErr: any) {
       console.warn("Backend Google Auth notice:", apiErr?.message);
-      setStoredToken(`demo_token_${userEmail.replace(/[^a-zA-Z0-9]/g, "_")}_${Date.now()}`);
+    }
+
+    // Check if new user requiring OTP verification
+    if (authRes?.require_otp) {
+      const activeOtpCode =
+        authRes.demo_otp && String(authRes.demo_otp).length === 6
+          ? String(authRes.demo_otp)
+          : Math.floor(100000 + Math.random() * 900000).toString();
+
+      setOtpTargetEmail(authRes.otp_sent_to || userEmail);
+      setDemoOTP(activeOtpCode);
+      setShowOTPModal(true);
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem("patentlens_user_email", userEmail);
+        localStorage.setItem("patentlens_user_name", fullName);
+      }
+
+      sendOTPEmail({
+        toEmail: authRes.otp_sent_to || userEmail,
+        toName: fullName,
+        otpCode: activeOtpCode,
+      }).catch(() => {});
+
+      setLoading(false);
+      setSuccessMsg(`Google account detected! Verification OTP code sent to ${userEmail}.`);
+      return;
+    }
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem("patentlens_user_email", userEmail);
+      localStorage.setItem("patentlens_user_name", fullName);
     }
 
     const token = authRes?.access_token || `demo_token_${userEmail.replace(/[^a-zA-Z0-9]/g, "_")}_${Date.now()}`;
     setStoredToken(token);
 
     setIsSuccess(true);
-    setSuccessMsg(`Google Sign-In successful! Logging in as ${userEmail}...`);
+    setSuccessMsg(`Welcome, ${fullName}! Google sign-in successful...`);
     setTimeout(() => router.push("/dashboard"), 500);
     setLoading(false);
   };

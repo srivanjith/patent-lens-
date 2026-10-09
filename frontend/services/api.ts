@@ -99,9 +99,10 @@ export const api = {
         user: { id: `user_${Date.now()}`, email, name, created_at: new Date().toISOString() }
       };
     }
-    const token = data.access_token || `token_reg_${Date.now()}`;
-    setStoredToken(token);
-    if (data.user) saveUserData(data.user);
+    if (data.access_token && !data.require_otp) {
+      setStoredToken(data.access_token);
+      if (data.user) saveUserData(data.user);
+    }
     return data;
   },
 
@@ -121,9 +122,10 @@ export const api = {
         user: { id: `user_${Date.now()}`, email, name, created_at: new Date().toISOString() }
       };
     }
-    const token = data.access_token || `token_login_${Date.now()}`;
-    setStoredToken(token);
-    if (data.user) saveUserData(data.user);
+    if (data.access_token && !data.require_otp) {
+      setStoredToken(data.access_token);
+      if (data.user) saveUserData(data.user);
+    }
     return data;
   },
 
@@ -138,14 +140,16 @@ export const api = {
       const email = payload.email || "googleuser@gmail.com";
       const name = payload.name || email.split("@")[0];
       data = {
-        access_token: `token_google_${Date.now()}`,
-        token_type: "bearer",
+        require_otp: true,
+        otp_sent_to: email,
+        demo_otp: "123456",
         user: { id: `user_${Date.now()}`, email, name, created_at: new Date().toISOString() }
       };
     }
-    const token = data.access_token || `token_google_${Date.now()}`;
-    setStoredToken(token);
-    if (data.user) saveUserData(data.user);
+    if (data.access_token && !data.require_otp) {
+      setStoredToken(data.access_token);
+      if (data.user) saveUserData(data.user);
+    }
     return data;
   },
 
