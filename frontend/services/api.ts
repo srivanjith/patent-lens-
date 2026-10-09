@@ -73,6 +73,13 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   return data as T;
 }
 
+function saveUserData(user?: { email?: string; name?: string } | null) {
+  if (typeof window !== "undefined" && user) {
+    if (user.email) localStorage.setItem("patentlens_user_email", user.email);
+    if (user.name) localStorage.setItem("patentlens_user_name", user.name);
+  }
+}
+
 export const api = {
   // Auth
   register: async (payload: any) => {
@@ -80,6 +87,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    if (data.user) saveUserData(data.user);
     if (data.access_token) setStoredToken(data.access_token);
     return data;
   },
@@ -89,6 +97,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    if (data.user) saveUserData(data.user);
     if (data.access_token) setStoredToken(data.access_token);
     return data;
   },
@@ -98,6 +107,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    if (data.user) saveUserData(data.user);
     if (data.access_token) setStoredToken(data.access_token);
     return data;
   },
@@ -107,15 +117,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    if (data.user) saveUserData(data.user);
     if (data.access_token) setStoredToken(data.access_token);
     return data;
   },
 
   resendOTP: async (payload: { email: string }): Promise<TokenResponse> => {
-    return request<TokenResponse>("/auth/resend-otp", {
+    const data = await request<TokenResponse>("/auth/resend-otp", {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    if (data.user) saveUserData(data.user);
+    return data;
   },
 
   logout: async () => {

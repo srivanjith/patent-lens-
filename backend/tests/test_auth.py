@@ -73,14 +73,14 @@ def test_google_oauth_existing_and_new_user():
     with TestClient(app) as client:
         email = f"google.user.{uuid.uuid4().hex[:6]}@gmail.com"
 
-        # 1. Google sign-in for new user returns require_otp: True for first-time email verification
+        # 1. Google sign-in for new first-time user requires OTP verification
         res1 = client.post("/api/auth/google", json={"email": email, "name": "Google User"})
         assert res1.status_code == 200
         data1 = res1.json()
         assert data1["require_otp"] is True
         demo_otp = data1["demo_otp"]
 
-        # 2. Verify 6-digit OTP code sent via EmailJS
+        # 2. Verify 6-digit OTP code
         res_verify = client.post("/api/auth/verify-otp", json={"email": email, "otp": demo_otp})
         assert res_verify.status_code == 200
         data_verify = res_verify.json()

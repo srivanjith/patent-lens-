@@ -154,7 +154,7 @@ export default function DashboardPage() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
             <div>
               <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight flex items-center gap-2">
-                Welcome back, <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-300 via-pink-200 to-amber-200">{user?.name || "Femina"}</span> 👋
+                Welcome back, <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-300 via-pink-200 to-amber-200">{user?.name || (user?.email ? user.email.split("@")[0] : "User")}</span> 👋
               </h1>
               <p className="text-xs sm:text-sm text-purple-200/80 mt-1 font-medium">
                 Turn ideas into insights with AI.

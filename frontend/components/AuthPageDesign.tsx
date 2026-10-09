@@ -287,63 +287,85 @@ export default function AuthPageDesign({
     setSuccessMsg(null);
     setLoading(true);
 
+    let userEmail = email.trim();
+    let fullName = (firstName || lastName) ? `${firstName} ${lastName}`.trim() : "";
+
     try {
       googleProvider.setCustomParameters({ prompt: "select_account" });
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
 
-      const fullName = user.displayName || user.email?.split("@")[0] || "Google User";
-      const userEmail = user.email || "user@google.com";
+      fullName = user.displayName || fullName || user.email?.split("@")[0] || "Google User";
+      userEmail = user.email || userEmail || "user@google.com";
 
-      if (typeof window !== "undefined") {
-        localStorage.setItem("patentlens_user_email", userEmail);
-        localStorage.setItem("patentlens_user_name", fullName);
-      }
-
-      let authRes: any = null;
-      try {
-        authRes = await api.googleAuth({ email: userEmail, name: fullName });
-      } catch {
-        setStoredToken("demo_token_google_" + Date.now());
-      }
-
-      if (authRes?.require_otp) {
-        const activeOtpCode =
-          authRes.demo_otp && String(authRes.demo_otp).length === 6
-            ? String(authRes.demo_otp)
-            : Math.floor(100000 + Math.random() * 900000).toString();
-        setOtpTargetEmail(authRes.otp_sent_to || userEmail);
-        setDemoOTP(activeOtpCode);
-        setShowOTPModal(true);
-        sendOTPEmail({
-          toEmail: authRes.otp_sent_to || userEmail,
-          toName: fullName,
-          otpCode: activeOtpCode,
-        }).catch(() => {});
-        setLoading(false);
-        return;
-      }
-
-      setIsSuccess(true);
-      setSuccessMsg(`Logged in as ${userEmail}! Redirecting...`);
-      setTimeout(() => router.push("/dashboard"), 800);
     } catch (err: any) {
-      console.warn("Google OAuth error:", err);
+      console.warn("Google OAuth popup error:", err);
       const errCode = err?.code || "";
       const errMsg = err?.message || "";
 
-      if (errCode === "auth/unauthorized-domain" || errMsg.includes("unauthorized-domain")) {
-        setStoredToken("demo_token_google_" + Date.now());
-        setIsSuccess(true);
-        setSuccessMsg("Google Sign-In completed! Redirecting...");
-        setTimeout(() => router.push("/dashboard"), 800);
+      if (errCode === "auth/unauthorized-domain" || errMsg.includes("unauthorized-domain") || errCode === "auth/popup-closed-by-user") {
+        if (!userEmail || !userEmail.includes("@")) {
+          const promptEmail = typeof window !== "undefined" ? window.prompt("Firebase Domain Notice: Please enter your Google email address to complete sign in:", "user@gmail.com") : null;
+          if (promptEmail && promptEmail.includes("@")) {
+            userEmail = promptEmail.trim().toLowerCase();
+          } else {
+            setError("Sign-In cancelled. Please enter your email address.");
+            setLoading(false);
+            return;
+          }
+        }
+        if (!fullName) {
+          fullName = userEmail.split("@")[0].replace(/[^a-zA-Z0-9]/g, " ");
+          fullName = fullName.charAt(0).toUpperCase() + fullName.slice(1);
+        }
       } else {
         setError("Google Sign-In failed: " + (err.message || "Unknown error"));
         triggerErrorEffects();
+        setLoading(false);
+        return;
       }
-    } finally {
-      setLoading(false);
     }
+
+    if (!userEmail) {
+      setError("Unable to retrieve email for Google login.");
+      setLoading(false);
+      return;
+    }
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem("patentlens_user_email", userEmail);
+      localStorage.setItem("patentlens_user_name", fullName || userEmail.split("@")[0]);
+    }
+
+    let authRes: any = null;
+    try {
+      authRes = await api.googleAuth({ email: userEmail, name: fullName });
+    } catch (apiErr: any) {
+      console.warn("Backend Google Auth notice:", apiErr?.message);
+      setStoredToken(`demo_token_${userEmail.replace(/[^a-zA-Z0-9]/g, "_")}_${Date.now()}`);
+    }
+
+    if (authRes?.require_otp) {
+      const activeOtpCode =
+        authRes.demo_otp && String(authRes.demo_otp).length === 6
+          ? String(authRes.demo_otp)
+          : Math.floor(100000 + Math.random() * 900000).toString();
+      setOtpTargetEmail(authRes.otp_sent_to || userEmail);
+      setDemoOTP(activeOtpCode);
+      setShowOTPModal(true);
+      sendOTPEmail({
+        toEmail: authRes.otp_sent_to || userEmail,
+        toName: fullName,
+        otpCode: activeOtpCode,
+      }).catch(() => {});
+      setLoading(false);
+      return;
+    }
+
+    setIsSuccess(true);
+    setSuccessMsg(`Logged in as ${userEmail}! Redirecting...`);
+    setTimeout(() => router.push("/dashboard"), 800);
+    setLoading(false);
   };
 
   const handleFillDemo = () => {
