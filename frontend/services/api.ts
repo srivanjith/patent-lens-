@@ -408,7 +408,7 @@ function generateClientMockSearchResponse(payload: SearchFormData): PriorArtSear
       semantic_score: 78,
       keyword_score: 74,
       domain_score: 85,
-      final_score: 76,
+      final_score: 76.9,
       matched_concepts: [keywords[0] || "Machine Learning", "Dynamic Optimization", "Telemetry Feedback"],
       rank: 1,
       relevance_explanation: "High semantic and technical feature alignment with user's detailed description.",
@@ -453,7 +453,7 @@ function generateClientMockSearchResponse(payload: SearchFormData): PriorArtSear
         evidence_strength: 80,
         distinctive_concepts: 70,
         domain_cpc_alignment: 85,
-        final_score: 76,
+        final_score: 76.9,
         confidence_score: 88,
         is_gated: false,
         formula_explanation: "Final Score = (25% Semantic) + (35% Technical Features) + (20% Evidence) + (10% Concepts) + (10% Domain)"
@@ -493,7 +493,7 @@ function generateClientMockSearchResponse(payload: SearchFormData): PriorArtSear
     }
   ];
 
-  const highestScore = 76;
+  const highestScore = 76.9;
   const riskLevel = highestScore >= 70 ? "HIGH" : highestScore >= 50 ? "MODERATE" : "LOW";
 
   const res: PriorArtSearchResponse = {
@@ -527,10 +527,10 @@ function generateClientMockSearchResponse(payload: SearchFormData): PriorArtSear
       }
     },
     results: patents,
-    is_demo_dataset: false,
-    data_source: "Live PatentLens AI Matcher Engine",
-    ai_model_used: "SBERT + Gemini 2.5 Flash",
-    disclaimer: "PatentLens AI provides AI-assisted preliminary prior-art search results for informational and research purposes only."
+    is_demo_dataset: true,
+    data_source: "PatentLens AI Demonstration Mode (Offline Fallback)",
+    ai_model_used: "Demonstration Heuristic Fallback",
+    disclaimer: "DEMONSTRATION MODE: The backend service is currently offline or unreachable. Results shown below are simulated sample records generated for interface demonstration purposes only and do not represent live USPTO/Lens API data."
   };
 
   if (typeof window !== "undefined") {

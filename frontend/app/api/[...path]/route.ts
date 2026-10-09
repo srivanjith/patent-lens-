@@ -62,7 +62,7 @@ function generateMockSearchResponse(body: any): any {
       semantic_score: 78,
       keyword_score: 74,
       domain_score: 85,
-      final_score: 76,
+      final_score: 76.9,
       matched_concepts: [keywords[0] || "Machine Learning", "Dynamic Optimization", "Telemetry Feedback"],
       rank: 1,
       relevance_explanation: "High semantic and technical feature alignment with user's detailed description.",
@@ -107,7 +107,7 @@ function generateMockSearchResponse(body: any): any {
         evidence_strength: 80,
         distinctive_concepts: 70,
         domain_cpc_alignment: 85,
-        final_score: 76,
+        final_score: 76.9,
         confidence_score: 88,
         is_gated: false,
         formula_explanation: "Final Score = (25% Semantic) + (35% Technical Features) + (20% Evidence) + (10% Concepts) + (10% Domain)"
@@ -196,7 +196,7 @@ function generateMockSearchResponse(body: any): any {
     }
   ];
 
-  const highestScore = 76;
+  const highestScore = 76.9;
   const riskLevel = highestScore >= 70 ? "HIGH" : highestScore >= 50 ? "MODERATE" : "LOW";
 
   const response = {
@@ -230,10 +230,10 @@ function generateMockSearchResponse(body: any): any {
       }
     },
     results: patents,
-    is_demo_dataset: false,
-    data_source: "Live PatentLens AI Matcher Engine",
-    ai_model_used: "SBERT + Gemini 2.5 Flash",
-    disclaimer: "PatentLens AI provides AI-assisted preliminary prior-art search results for informational and research purposes only. The results do not constitute legal advice or a patentability determination."
+    is_demo_dataset: true,
+    data_source: "PatentLens AI Demonstration Mode (Backend Service Offline)",
+    ai_model_used: "Demonstration Heuristic Fallback",
+    disclaimer: "DEMONSTRATION MODE: The Python backend service is currently offline or unconfigured. Results shown are simulated demonstration records for preview purposes and do not represent live Lens API or USPTO records."
   };
 
   mockSearchStore.set(searchId, response);
@@ -270,7 +270,7 @@ async function handleMockFallback(subPath: string, req: NextRequest) {
     if (mockSearchStore.has(id)) {
       return NextResponse.json(mockSearchStore.get(id));
     }
-    const resp = generateMockSearchResponse({ title: `Prior-Art Analysis ${id.substring(0, 8)}` });
+    const resp = generateMockSearchResponse({ title: `Demonstration Analysis ${id.substring(0, 8)}` });
     resp.search_id = id;
     mockSearchStore.set(id, resp);
     return NextResponse.json(resp);
@@ -295,40 +295,13 @@ async function handleMockFallback(subPath: string, req: NextRequest) {
   }
 
   if (cleanPath.startsWith("auth/")) {
-    let body: any = {};
-    try {
-      if (req.method === "POST" || req.method === "PUT") {
-        body = await req.json().catch(() => ({}));
-      }
-    } catch {}
-
-    const email = body?.email || "inventor@startup.com";
-    const rawName = body?.name || email.split("@")[0].replace(/[^a-zA-Z0-9]/g, " ");
-    const name = rawName ? (rawName.charAt(0).toUpperCase() + rawName.slice(1)) : "Inventor";
-    const token = `token_auth_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-    if (cleanPath.startsWith("auth/me")) {
-      return NextResponse.json({
-        id: `user_${email.replace(/[^a-zA-Z0-9]/g, "_")}`,
-        email: email,
-        name: name,
-        created_at: new Date().toISOString(),
-        search_count: 5
-      });
-    }
-
-    return NextResponse.json({
-      access_token: token,
-      token_type: "bearer",
-      require_otp: false,
-      user: {
-        id: `user_${email.replace(/[^a-zA-Z0-9]/g, "_")}`,
-        email: email,
-        name: name,
-        created_at: new Date().toISOString(),
-        search_count: 5
-      }
-    });
+    return NextResponse.json(
+      {
+        detail: "Backend Authentication Unavailable: The Python backend service is offline or unconfigured. Real authentication requires a running FastAPI backend.",
+        error: "BACKEND_AUTH_UNAVAILABLE"
+      },
+      { status: 503 }
+    );
   }
 
   return NextResponse.json({ success: true, message: "OK (Fallback)" });
