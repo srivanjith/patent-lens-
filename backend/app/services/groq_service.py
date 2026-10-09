@@ -57,7 +57,8 @@ class GroqService:
                 from app.services.gemini_service import gemini_service
             return gemini_service._heuristic_invention_analysis(title, problem_statement, description, keywords, domain)
 
-        if self.is_configured and self.client is not None:
+        client = self.client
+        if self.is_configured and client is not None:
             try:
                 system_prompt = "You are a Senior Patent Examiner and IP Analyst. Return strict valid JSON only."
                 user_prompt = f"""
@@ -103,7 +104,7 @@ Return ONLY valid JSON matching this exact structure:
 """
                 import concurrent.futures
                 def _call_groq_inv():
-                    return self.client.chat.completions.create(
+                    return client.chat.completions.create(
                         model=self.model_name,
                         messages=[
                             {"role": "system", "content": system_prompt},
@@ -115,7 +116,7 @@ Return ONLY valid JSON matching this exact structure:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     fut = pool.submit(_call_groq_inv)
                     res = fut.result(timeout=12.0)
-                text_content = res.choices[0].message.content
+                text_content = res.choices[0].message.content or "{}"
                 parsed = json.loads(text_content)
                 try:
                     from app.services.gemini_service import gemini_service
@@ -162,7 +163,8 @@ Return ONLY valid JSON matching this exact structure:
                 target_title, target_description, patent_number, patent_title, patent_abstract, similarity_score, patent_description
             )
 
-        if self.is_configured and self.client is not None:
+        client = self.client
+        if self.is_configured and client is not None:
             try:
                 system_prompt = "You are a Senior Patent Examiner conducting strict prior-art claim analysis. Output strict valid JSON only."
                 user_prompt = f"""
@@ -255,7 +257,7 @@ Return ONLY valid JSON matching this exact structure:
 
                 import concurrent.futures
                 def _call_groq_pair():
-                    return self.client.chat.completions.create(
+                    return client.chat.completions.create(
                         model=self.model_name,
                         messages=[
                             {"role": "system", "content": system_prompt},
@@ -267,7 +269,7 @@ Return ONLY valid JSON matching this exact structure:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     fut = pool.submit(_call_groq_pair)
                     response = fut.result(timeout=12.0)
-                text_content = response.choices[0].message.content
+                text_content = response.choices[0].message.content or "{}"
                 parsed = json.loads(text_content)
                 parsed["ai_powered"] = True
                 parsed["model_used"] = self.model_name
@@ -306,7 +308,8 @@ Return ONLY valid JSON matching this exact structure:
         risk_level: str
     ) -> Dict[str, Any]:
         """Generate high-level overall summary across top prior-art matches using Groq LLaMA 3.3."""
-        if self.is_configured and self.client is not None:
+        client = self.client
+        if self.is_configured and client is not None:
             try:
                 patents_summary = "\n".join([
                     f"- Patent {p.get('patent_number', 'N/A')}: {p.get('title', '')} (SBERT Sim: {p.get('final_score', 0)}%)\n"
@@ -336,7 +339,7 @@ Return ONLY valid JSON.
 """
                 import concurrent.futures
                 def _call_groq_nov():
-                    return self.client.chat.completions.create(
+                    return client.chat.completions.create(
                         model=self.model_name,
                         messages=[{"role": "user", "content": user_prompt}],
                         response_format={"type": "json_object"},
@@ -345,7 +348,8 @@ Return ONLY valid JSON.
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     fut = pool.submit(_call_groq_nov)
                     response = fut.result(timeout=12.0)
-                parsed = json.loads(response.choices[0].message.content)
+                text_content = response.choices[0].message.content or "{}"
+                parsed = json.loads(text_content)
                 parsed["ai_powered"] = True
                 parsed["model_used"] = self.model_name
                 parsed["provider"] = "groq"

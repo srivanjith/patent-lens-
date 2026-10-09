@@ -78,6 +78,10 @@ def ensure_columns_exist(engine_instance):
         ("patents_retrieved", "INTEGER DEFAULT 0"),
         ("patents_shortlisted", "INTEGER DEFAULT 0"),
         ("patents_deeply_analyzed", "INTEGER DEFAULT 0"),
+        ("pipeline_metrics", "TEXT"),
+    ]
+    cols_search_results = [
+        ("analysis_payload", "TEXT"),
     ]
     cols_users = [
         ("is_verified", "BOOLEAN DEFAULT FALSE"),
@@ -86,9 +90,9 @@ def ensure_columns_exist(engine_instance):
     ]
     cols_patents = [
         ("claims", "TEXT"),
-        ("source_type", "VARCHAR(50) DEFAULT 'THE LENS'"),
-        ("source_status", "VARCHAR(50) DEFAULT 'LIVE_API'"),
-        ("document_type", "VARCHAR(50) DEFAULT 'PATENT'"),
+        ("source_type", "VARCHAR(50) DEFAULT 'DATABASE'"),
+        ("source_status", "VARCHAR(50) DEFAULT 'DATABASE'"),
+        ("document_type", "VARCHAR(50) DEFAULT 'DATABASE RECORD'"),
         ("lens_id", "VARCHAR(100)"),
         ("filing_date", "VARCHAR(50)"),
         ("earliest_priority_date", "VARCHAR(50)"),
@@ -108,6 +112,16 @@ def ensure_columns_exist(engine_instance):
                         conn.execute(text(f"ALTER TABLE searches ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
                     else:
                         conn.execute(text(f"ALTER TABLE searches ADD COLUMN {col_name} {col_type};"))
+                    conn.commit()
+                except Exception:
+                    pass
+
+            for col_name, col_type in cols_search_results:
+                try:
+                    if IS_POSTGRES:
+                        conn.execute(text(f"ALTER TABLE search_results ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
+                    else:
+                        conn.execute(text(f"ALTER TABLE search_results ADD COLUMN {col_name} {col_type};"))
                     conn.commit()
                 except Exception:
                     pass
@@ -148,4 +162,36 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# ==========================================
+# MongoDB Engine & Beanie ODM Connection
+# ==========================================
+
+mongo_client = None
+
+async def init_mongo():
+    global mongo_client
+    mongo_url = getattr(settings, "MONGODB_URL", "mongodb://localhost:27017/patentlens")
+    db_name = getattr(settings, "MONGODB_DB_NAME", "patentlens")
+    try:
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from beanie import init_beanie
+        from app.models.models import UserDoc, PatentDoc, SearchDoc, SavedPatentDoc, ReportDoc
+
+        logger.info(f"Initializing MongoDB connection to {db_name}...")
+        mongo_client = AsyncIOMotorClient(mongo_url)
+        await init_beanie(
+            database=mongo_client[db_name],
+            document_models=[UserDoc, PatentDoc, SearchDoc, SavedPatentDoc, ReportDoc]
+        )
+        logger.info("MongoDB & Beanie Document ORM initialized successfully.")
+    except Exception as e:
+        logger.warning(f"MongoDB initialization note: {e}")
+
+async def close_mongo():
+    global mongo_client
+    if mongo_client:
+        mongo_client.close()
+        logger.info("MongoDB connection closed.")
 

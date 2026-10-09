@@ -1,4 +1,5 @@
 import re
+from typing import Optional, List, Dict, Any
 
 def clean_text(text: str) -> str:
     """Clean and normalize raw text while preserving technical terminology."""
@@ -23,7 +24,7 @@ def validate_invention_input(title: str, description: str, min_desc_length: int 
         
     return {"valid": True, "title": cleaned_title, "description": cleaned_desc}
 
-def prepare_combined_text(title: str, problem_statement: str, description: str, keywords: list = None) -> str:
+def prepare_combined_text(title: str, problem_statement: str, description: str, keywords: Optional[List[str]] = None) -> str:
     """
     Combine invention fields into a rich semantic string for SBERT embedding generation.
     Preserves all domain-specific terminology.

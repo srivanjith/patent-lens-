@@ -161,33 +161,73 @@ export default function PatentCard({ item, onSavedToggle, isInitialSaved = false
       <div className="space-y-2.5">
         <div className="flex flex-wrap items-center gap-2">
           {(() => {
-            const sourceType = patent.source_type || (patent.patent_number.startsWith("ARXIV") ? "arXiv" : "THE LENS");
-            const docType = patent.document_type || (patent.patent_number.startsWith("ARXIV") ? "NON-PATENT LITERATURE" : "PATENT");
-            const isNPL = docType.includes("NON-PATENT") || sourceType.toLowerCase() === "arxiv";
+            const rawStatus = (item.source_status || patent.source_status || "DATABASE").toUpperCase();
+            const rawType = (patent.source_type || item.source_type || (patent.patent_number.startsWith("ARXIV") ? "ARXIV" : "DATABASE")).toUpperCase();
+
+            let displaySource = "DATABASE";
+            let defaultDocType = rawStatus === "DATABASE" ? "DATABASE RECORD" : "PATENT";
+
+            if (rawStatus === "LIVE_API" && (rawType === "THE LENS" || rawType === "THE LENS PATENT API")) {
+              displaySource = "THE LENS";
+              defaultDocType = "PATENT";
+            } else if (rawType === "ARXIV" || patent.patent_number.startsWith("ARXIV")) {
+              displaySource = "arXiv";
+              defaultDocType = "NON-PATENT LITERATURE";
+            } else if (rawStatus === "FALLBACK" || rawType.includes("FALLBACK") || rawType === "USPTO") {
+              displaySource = rawType === "USPTO" ? "FALLBACK (USPTO)" : "FALLBACK";
+              defaultDocType = "PATENT";
+            } else if (rawStatus === "DATABASE" || rawType === "DATABASE" || rawType === "DATABASE REPOSITORY") {
+              displaySource = "DATABASE";
+            } else {
+              displaySource = rawType;
+            }
+
+            const docType = patent.document_type || defaultDocType;
+            const isNPL = docType.includes("NON-PATENT") || displaySource.toLowerCase() === "arxiv";
+            const isDatabase = displaySource === "DATABASE" || rawStatus === "DATABASE";
+            const isFallback = rawStatus === "FALLBACK" || displaySource.includes("FALLBACK");
+
+            let colorStyle = "bg-cyan-500/10 text-cyan-300 border-cyan-500/25";
+            if (isNPL) {
+              colorStyle = "bg-amber-500/10 text-amber-300 border-amber-500/25";
+            } else if (isDatabase) {
+              colorStyle = "bg-purple-500/10 text-purple-300 border-purple-500/25";
+            } else if (isFallback) {
+              colorStyle = "bg-orange-500/10 text-orange-300 border-orange-500/25";
+            }
+
             return (
-              <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-semibold border ${
-                isNPL
-                  ? "bg-amber-500/10 text-amber-300 border-amber-500/25"
-                  : "bg-cyan-500/10 text-cyan-300 border-cyan-500/25"
-              }`}>
-                Source: {sourceType} • {docType}
+              <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-semibold border ${colorStyle}`}>
+                Source: {displaySource} • {docType}
               </span>
             );
           })()}
 
           {/* Temporal Status Badge */}
           {(() => {
-            const tempStatus = item.temporal_status || "DATE_UNKNOWN";
-            if (tempStatus === "AFTER_REFERENCE_DATE" || tempStatus === "PUBLISHED_AFTER_REFERENCE" || tempStatus === "EARLIER_PRIORITY_BUT_PUBLISHED_AFTER") {
+            const tempStatus = item.temporal_status || "DATE_UNAVAILABLE";
+            if (tempStatus === "PUBLISHED_BEFORE_REFERENCE") {
+              return (
+                <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                  ✓ Prior Art before reference date
+                </span>
+              );
+            } else if (tempStatus === "AFTER_REFERENCE_DATE" || tempStatus === "PUBLISHED_AFTER_REFERENCE" || tempStatus === "EARLIER_PRIORITY_BUT_PUBLISHED_AFTER") {
               return (
                 <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
                   Published Later (Post-Date)
                 </span>
               );
+            } else if (tempStatus === "SAME_DATE") {
+              return (
+                <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                  Same Date as Reference
+                </span>
+              );
             } else {
               return (
-                <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                  ✓ Prior Art before reference date
+                <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-zinc-800/80 text-zinc-400 border border-zinc-700/50">
+                  Pub Date: {formatDate(patent.publication_date)}
                 </span>
               );
             }
@@ -195,10 +235,17 @@ export default function PatentCard({ item, onSavedToggle, isInitialSaved = false
 
           {/* Honest Evidence Status Badge */}
           {(() => {
+            const isUnavailable = bd.evidence?.status === "UNAVAILABLE" || (item.claims_status === "NOT_AVAILABLE" && item.full_text_status === "NOT_AVAILABLE") || item.evidence_status === "UNAVAILABLE";
             const hasVerifiedEv = (bd.evidence_strength > 10) || evidenceItems.some(i => i.verified);
-            const evStatusText = item.evidence_status_label || (hasVerifiedEv ? (item.claims_status === "AVAILABLE" ? "Claim evidence verified" : "Description evidence verified") : "Limited evidence");
 
-            if (hasVerifiedEv && bd.evidence_strength > 10) {
+            if (isUnavailable) {
+              return (
+                <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-zinc-800/80 text-zinc-400 border border-zinc-700/50">
+                  Evidence: UNAVAILABLE
+                </span>
+              );
+            } else if (hasVerifiedEv && bd.evidence_strength > 10) {
+              const evStatusText = item.evidence_status_label || (item.claims_status === "AVAILABLE" ? "Claim evidence verified" : "Description evidence verified");
               return (
                 <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-emerald-500/10 text-emerald-300 border border-emerald-500/25">
                   ✓ {evStatusText} ({Math.round(bd.evidence_strength)}%)
@@ -212,6 +259,13 @@ export default function PatentCard({ item, onSavedToggle, isInitialSaved = false
               );
             }
           })()}
+
+          {/* Low Technical Similarity Tag when 0 feature matches */}
+          {matchedCount === 0 && (
+            <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+              LOW TECHNICAL SIMILARITY (Candidate Only)
+            </span>
+          )}
 
           <span className="px-2.5 py-0.5 rounded text-[11px] font-mono font-medium bg-zinc-900 text-zinc-300 border border-zinc-800">
             {patent.domain}

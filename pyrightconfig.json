@@ -1,0 +1,21 @@
+{
+  "extraPaths": [
+    ".",
+    "./backend"
+  ],
+  "pythonVersion": "3.10",
+  "executionEnvironments": [
+    {
+      "root": "./backend",
+      "extraPaths": [
+        "."
+      ]
+    },
+    {
+      "root": "./scratch",
+      "extraPaths": [
+        "../backend"
+      ]
+    }
+  ]
+}

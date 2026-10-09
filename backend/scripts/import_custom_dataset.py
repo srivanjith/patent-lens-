@@ -4,7 +4,7 @@ import json
 import csv
 import time
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable, TypeVar
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -15,6 +15,8 @@ from ml.embedding_service import embedding_service
 from ml.preprocessing import prepare_combined_text
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("patentlens.import_custom")
+
+T = TypeVar("T")
 
 def load_records_from_file(file_path: str) -> List[Dict[str, Any]]:
     """
@@ -51,11 +53,12 @@ def load_records_from_file(file_path: str) -> List[Dict[str, Any]]:
         return []
 
 
-def execute_with_db_retry(operation_func, max_retries: int = 3):
+def execute_with_db_retry(operation_func: Callable[[Any], T], max_retries: int = 3) -> T:
     """
     Execute a database operation with automatic engine disposal and reconnection 
     if Neon / PostgreSQL closes an idle connection unexpectedly.
     """
+    last_exception = None
     for attempt in range(1, max_retries + 1):
         db = SessionLocal()
         try:
@@ -63,6 +66,7 @@ def execute_with_db_retry(operation_func, max_retries: int = 3):
             db.close()
             return result
         except Exception as e:
+            last_exception = e
             db.rollback()
             db.close()
             err_msg = str(e).lower()
@@ -82,6 +86,10 @@ def execute_with_db_retry(operation_func, max_retries: int = 3):
                 if attempt >= max_retries:
                     logger.error(f"Database operation failed after {max_retries} attempts: {e}")
                 raise e
+
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("Database operation failed without returning a result.")
 
 
 def import_custom_dataset_to_postgres(file_path: str, default_domain: str = "Artificial Intelligence"):

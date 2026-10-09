@@ -145,12 +145,13 @@ Return ONLY valid JSON matching this exact structure:
 }}
 """
             try:
-                if self.client is not None:
+                client = self.client
+                if client is not None:
                     from google.genai import types
                     import concurrent.futures
                     logger.info("Extracting invention technical features via Gemini SDK...")
                     def _call_sdk():
-                        return self.client.models.generate_content(
+                        return client.models.generate_content(
                             model=self.model_name,
                             contents=f"{system_prompt}\n\n{user_prompt}",
                             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
@@ -445,12 +446,13 @@ Return ONLY valid JSON matching this exact structure:
 """
 
             try:
-                if self.client is not None:
+                client = self.client
+                if client is not None:
                     from google.genai import types
                     import concurrent.futures
                     logger.info("Executing Gemini Flash analysis via official google-genai SDK...")
                     def _call_pair_sdk():
-                        return self.client.models.generate_content(
+                        return client.models.generate_content(
                             model=self.model_name,
                             contents=f"{system_prompt}\n\n{user_prompt}",
                             config=types.GenerateContentConfig(
@@ -694,11 +696,12 @@ Provide a structured analysis in JSON format with keys:
 Return ONLY valid JSON.
 """
 
-            if self.client is not None:
+            client = self.client
+            if client is not None:
                 from google.genai import types
                 import concurrent.futures
                 def _call_novelty_sdk():
-                    return self.client.models.generate_content(
+                    return client.models.generate_content(
                         model=self.model_name,
                         contents=user_prompt,
                         config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2)

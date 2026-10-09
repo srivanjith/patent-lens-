@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.database import engine, Base, ensure_columns_exist
+from app.core.database import engine, Base, ensure_columns_exist, init_mongo, close_mongo
 from ml.embedding_service import embedding_service
 from scripts.seed_database import seed_patents_if_needed
 
@@ -48,8 +48,11 @@ async def lifespan(app: FastAPI):
     logger.info(f"Groq Model:      {settings.GROQ_MODEL}")
     logger.info(f"Embedding Model: {settings.MODEL_NAME}")
     logger.info("====================================================================")
+    await init_mongo()
     yield
+    await close_mongo()
     logger.info("Shutting down PatentLens AI Backend...")
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

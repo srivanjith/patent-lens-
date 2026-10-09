@@ -166,7 +166,7 @@ def test_10_domain_search_quality_benchmarks(authenticated_client):
         family_ids = [r.get("patent_number", "").split("-")[0] for r in top_5 if r.get("patent_number")]
         
         # Verify candidate scores are sorted strictly descending
-        scores = [r.get("confidence_score", 0.0) for r in top_5]
+        scores = [r.get("final_score", 0.0) for r in top_5]
         assert scores == sorted(scores, reverse=True), f"Results not sorted by score for {item['domain']}: {scores}"
 
         # 3. Top Candidate Inspection
@@ -187,10 +187,10 @@ def test_10_domain_search_quality_benchmarks(authenticated_client):
                 assert "Disclosed in prior-art technical specification" not in quote, "Synthetic placeholder detected in evidence!"
 
             # Verify deterministic score consistency
-            conf_score = top_candidate.get("confidence_score", 0.0)
+            final_score = top_candidate.get("final_score", 0.0)
             bd = top_candidate.get("score_breakdown", {})
             if bd and "final_score" in bd:
-                assert abs(bd["final_score"] - conf_score) <= 0.1 or abs(bd.get("confidence_score", 0.0) - conf_score) <= 0.1, f"Score breakdown mismatch: {bd['final_score']} vs {conf_score}"
+                assert abs(bd["final_score"] - final_score) <= 0.1, f"Score breakdown mismatch: {bd['final_score']} vs {final_score}"
 
         domain_reports.append({
             "domain": item["domain"],
@@ -198,7 +198,7 @@ def test_10_domain_search_quality_benchmarks(authenticated_client):
             "retrieved": summary.get("patents_retrieved", 0),
             "families": summary.get("unique_families", 0),
             "top_candidate": top_candidate.get("patent_number") if top_candidate else "NONE",
-            "top_score": top_candidate.get("confidence_score", 0.0) if top_candidate else 0.0,
+            "top_score": top_candidate.get("final_score", 0.0) if top_candidate else 0.0,
             "relevance": top_candidate.get("similarity_level") if top_candidate else "IRRELEVANT",
             "date_status": top_candidate.get("prior_art_date_status") if top_candidate else "N/A"
         })

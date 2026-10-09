@@ -198,14 +198,16 @@ class PatentAPIService:
 
         total_db_patents = db.query(Patent).count()
         final_patents_searched = lens_retrieved_count if (lens_retrieved_count and lens_retrieved_count > 0) else len(raw_candidates)
+        live_patent_numbers = [item.get("patent_number", "").strip() for item in raw_candidates if item.get("source_status") == "LIVE_API" and item.get("patent_number", "").strip()]
 
         return {
-            "patents_retrieved": lens_retrieved_count if lens_api_service.is_configured else len(raw_candidates),
+            "patents_retrieved": lens_retrieved_count if lens_api_service.is_configured else 0,
             "patents_newly_cached": len(newly_cached_patents),
             "patents_skipped_duplicates": skipped_count,
             "patents_searched": final_patents_searched,
             "lens_total_searched": lens_total_searched,
-            "lens_api_status": lens_api_status
+            "lens_api_status": lens_api_status,
+            "live_patent_numbers": live_patent_numbers
         }
 
     def execute_citation_expansion(
@@ -329,23 +331,27 @@ class PatentAPIService:
 
                     for idx, entry in enumerate(root.findall('atom:entry', namespace)):
                         id_elem = entry.find('atom:id', namespace)
-                        raw_id = id_elem.text.split('/')[-1] if id_elem is not None else f"DOC-{idx}"
+                        raw_id = (id_elem.text or "").split('/')[-1] if (id_elem is not None and id_elem.text) else f"DOC-{idx}"
                         doc_id = raw_id.replace('.', '-').replace('/', '-')
                         
                         # Format clearly as arXiv non-patent literature identifier
                         doc_number = f"ARXIV-{doc_id.upper()}"
 
                         t_elem = entry.find('atom:title', namespace)
-                        p_title = t_elem.text.replace('\n', ' ').strip() if t_elem is not None else "arXiv Research Paper"
+                        p_title = (t_elem.text or "").replace('\n', ' ').strip() if (t_elem is not None and t_elem.text) else "arXiv Research Paper"
 
                         s_elem = entry.find('atom:summary', namespace)
-                        p_summary = s_elem.text.replace('\n', ' ').strip() if s_elem is not None else ""
+                        p_summary = (s_elem.text or "").replace('\n', ' ').strip() if (s_elem is not None and s_elem.text) else ""
 
                         pub_elem = entry.find('atom:published', namespace)
-                        p_date = pub_elem.text[:10] if pub_elem is not None else "2024-01-01"
+                        p_date = (pub_elem.text or "")[:10] if (pub_elem is not None and pub_elem.text) else "2024-01-01"
 
                         # Extract authors
-                        authors = [a.find('atom:name', namespace).text for a in entry.findall('atom:author', namespace) if a.find('atom:name', namespace) is not None]
+                        authors: List[str] = []
+                        for a in entry.findall('atom:author', namespace):
+                            name_elem = a.find('atom:name', namespace)
+                            if name_elem is not None and name_elem.text:
+                                authors.append(name_elem.text.strip())
                         author_str = ", ".join(authors[:3]) if authors else "arXiv Researcher"
 
                         records.append({

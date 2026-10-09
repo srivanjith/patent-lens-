@@ -38,9 +38,9 @@ class LensAPIService:
     @staticmethod
     def _sanitize_query_for_lens(raw_q: str) -> str:
         import re
-        if not raw_q or not str(raw_q).strip():
+        if not raw_q or not raw_q.strip():
             return "technology"
-        q = re.sub(r'claims:\(|\)|classifications_cpc\.symbol:|[&|/]', ' ', str(raw_q))
+        q = re.sub(r'claims:\(|\)|classifications_cpc\.symbol:|[&|/]', ' ', raw_q)
         words = [w for w in re.findall(r'[a-zA-Z0-9]+', q) if len(w) > 2 and w.lower() not in {'for', 'and', 'the', 'with', 'msme', 'system', 'device', 'method', 'apparatus'}]
         if len(words) >= 3:
             return f"{words[0]} AND {words[1]} AND {words[2]}"

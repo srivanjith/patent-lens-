@@ -87,11 +87,11 @@ class PatentOut(BaseModel):
     grant_date: Optional[str] = None
     domain: str
     source_url: Optional[str] = None
-    source_type: Optional[str] = "THE LENS"
-    source_status: Optional[str] = "LIVE_API"
-    source_name: Optional[str] = "The Lens Patent API"
-    retrieval_status: Optional[str] = "SUCCESS"
-    document_type: Optional[str] = "PATENT"
+    source_type: Optional[str] = "DATABASE"
+    source_status: Optional[str] = "DATABASE"
+    source_name: Optional[str] = "Database Repository"
+    retrieval_status: Optional[str] = "DATABASE_REPOSITORY"
+    document_type: Optional[str] = "DATABASE RECORD"
     cpc_codes: Optional[str] = None
     ipc_codes: Optional[str] = None
     jurisdiction: Optional[str] = None
@@ -276,9 +276,9 @@ class SearchResultItem(BaseModel):
     relevance_level: Optional[str] = None
     evidence_status: Optional[str] = None
     evidence_availability_level: Optional[str] = "NOT_VERIFIABLE"
-    source_status: Optional[str] = "LIVE_API"
-    source_name: Optional[str] = "The Lens Patent API"
-    retrieval_status: Optional[str] = "SUCCESS"
+    source_status: Optional[str] = "DATABASE"
+    source_name: Optional[str] = "Database Repository"
+    retrieval_status: Optional[str] = "DATABASE_REPOSITORY"
     feature_match_status: Optional[str] = "NOT_VERIFIABLE"
     feature_match_source: Optional[str] = "ABSTRACT/TITLE"
 

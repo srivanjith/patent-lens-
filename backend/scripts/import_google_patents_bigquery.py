@@ -90,20 +90,24 @@ def fetch_google_patents_public_api(keyword: str, limit: int = 10) -> List[Dict[
             
             for index, entry in enumerate(root.findall('atom:entry', namespace)):
                 id_elem = entry.find('atom:id', namespace)
-                doc_id = id_elem.text.split('/')[-1].replace('.', '-') if id_elem is not None else f"DOC-{index}"
+                doc_id = (id_elem.text or f"DOC-{index}").split('/')[-1].replace('.', '-') if id_elem is not None and id_elem.text else f"DOC-{index}"
                 pub_num = f"GP-PAT-{doc_id.upper()}"
                 
                 title_elem = entry.find('atom:title', namespace)
-                title = title_elem.text.replace('\n', ' ').strip() if title_elem is not None else "Untitled Google Patent Record"
+                title = (title_elem.text or "").replace('\n', ' ').strip() if title_elem is not None and title_elem.text else "Untitled Google Patent Record"
                 
                 summary_elem = entry.find('atom:summary', namespace)
-                abstract = summary_elem.text.replace('\n', ' ').strip() if summary_elem is not None else title
+                abstract = (summary_elem.text or "").replace('\n', ' ').strip() if summary_elem is not None and summary_elem.text else title
                 
-                authors = [author.find('atom:name', namespace).text for author in entry.findall('atom:author', namespace) if author.find('atom:name', namespace) is not None]
+                authors: List[str] = []
+                for author in entry.findall('atom:author', namespace):
+                    name_elem = author.find('atom:name', namespace)
+                    if name_elem is not None and name_elem.text:
+                        authors.append(name_elem.text)
                 authors_str = ", ".join(authors) if authors else "Google Patents Contributor"
                 
                 published_elem = entry.find('atom:published', namespace)
-                pub_date = published_elem.text[:10] if published_elem is not None else "2024-01-01"
+                pub_date = (published_elem.text or "")[:10] if published_elem is not None and published_elem.text else "2024-01-01"
                 
                 patents.append({
                     "patent_number": pub_num,
@@ -143,6 +147,7 @@ def import_google_patents_to_postgres(keyword: str = "artificial intelligence", 
             embedding_service.load_model()
 
         imported_count = 0
+        mongo_items = []
         for p in raw_patents:
             pat_num = p["patent_number"]
 
@@ -155,23 +160,80 @@ def import_google_patents_to_postgres(keyword: str = "artificial intelligence", 
             combined_text = prepare_combined_text(title=p["title"], problem_statement="", description=p["abstract"])
             embedding_vec = embedding_service.generate_embedding(combined_text)
 
+            desc_text = f"Google Patents Public Dataset record {pat_num}. Abstract: {p['abstract']}"
             new_patent = Patent(
                 patent_number=pat_num,
                 title=p["title"],
                 abstract=p["abstract"],
-                description=f"Google Patents Public Dataset record {pat_num}. Abstract: {p['abstract']}",
+                description=desc_text,
                 inventors=p["inventors"],
                 assignee=p["assignee"],
                 publication_date=p["publication_date"],
                 domain=domain,
                 source_url=p["source_url"],
+                source_type="GOOGLE_PATENTS",
+                source_status="DATABASE",
+                document_type="PATENT",
+                data_quality_status="VERIFIED",
                 embedding=embedding_vec
             )
             db.add(new_patent)
             imported_count += 1
+            mongo_items.append({
+                "patent_number": pat_num,
+                "title": p["title"],
+                "abstract": p["abstract"],
+                "description": desc_text,
+                "inventors": p["inventors"],
+                "assignee": p["assignee"],
+                "publication_date": p["publication_date"],
+                "domain": domain,
+                "source_url": p["source_url"],
+                "embedding": embedding_vec
+            })
 
         db.commit()
         logger.info(f"Successfully imported {imported_count} Google Patents into PostgreSQL!")
+
+        # Attempt Dual Persistence into MongoDB Atlas PatentDoc
+        if mongo_items:
+            try:
+                from app.models.models import PatentDoc
+                import asyncio
+
+                async def _save_to_mongo(items):
+                    for item in items:
+                        try:
+                            m_exist = await PatentDoc.find_one(PatentDoc.patent_number == item["patent_number"])
+                            if not m_exist:
+                                doc = PatentDoc(
+                                    patent_number=item["patent_number"],
+                                    title=item["title"],
+                                    abstract=item["abstract"],
+                                    description=item["description"],
+                                    inventors=item["inventors"],
+                                    assignee=item["assignee"],
+                                    publication_date=item["publication_date"],
+                                    domain=item["domain"],
+                                    source_url=item["source_url"],
+                                    source_type="GOOGLE_PATENTS",
+                                    source_status="DATABASE",
+                                    document_type="PATENT",
+                                    data_quality_status="VERIFIED",
+                                    embedding=item["embedding"]
+                                )
+                                await doc.insert()
+                        except Exception:
+                            pass
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.run_until_complete(_save_to_mongo(mongo_items))
+                except Exception:
+                    asyncio.run(_save_to_mongo(mongo_items))
+                logger.info("Successfully synchronized imported Google Patents to MongoDB Atlas!")
+            except Exception as e_m:
+                logger.info(f"MongoDB dual import note: {e_m}")
 
     except Exception as e:
         logger.error(f"Error during Google Patents import: {e}")

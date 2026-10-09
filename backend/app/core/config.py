@@ -24,6 +24,8 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "postgresql://postgres:femin12345@localhost:5432/Patentartpro"
+    MONGODB_URL: str = "mongodb://localhost:27017/patentlens"
+    MONGODB_DB_NAME: str = "patentlens"
 
     # JWT Security
     JWT_SECRET: str = "patentlens_super_secret_jwt_key_2026_change_in_production"
@@ -40,9 +42,9 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "groq"
     MODEL_NAME: str = "all-MiniLM-L6-v2"
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.5-flash"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
 
     # External Patent APIs Configuration

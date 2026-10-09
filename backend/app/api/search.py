@@ -1,3 +1,4 @@
+import json
 from app.schemas.schemas import ComponentBreakdownItem
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -125,12 +126,39 @@ def perform_prior_art_search(
         from app.core.database import IS_POSTGRES, HAS_PGVECTOR
     import numpy as np
 
-    live_patents = db.query(Patent).filter(Patent.source_status == "LIVE_API").order_by(Patent.id.desc()).limit(150).all()
-    recent_patents = db.query(Patent).order_by(Patent.id.desc()).limit(150).all()
-    seed_patents = db.query(Patent).limit(100).all()
+    live_patents = []
+    recent_patents = []
+    seed_patents = []
+    try:
+        live_patents = db.query(Patent).filter(Patent.source_status == "LIVE_API").order_by(Patent.id.desc()).limit(150).all()
+        recent_patents = db.query(Patent).order_by(Patent.id.desc()).limit(150).all()
+        seed_patents = db.query(Patent).limit(100).all()
+    except Exception:
+        pass
 
-    patent_map = {p.patent_number: p for p in (live_patents + recent_patents + seed_patents) if p and p.patent_number}
+    mongo_patents = []
+    try:
+        from app.models.models import PatentDoc
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            mongo_patents = loop.run_until_complete(PatentDoc.find().limit(300).to_list())
+        except Exception:
+            mongo_patents = asyncio.run(PatentDoc.find().limit(300).to_list())
+    except Exception as e_mfetch:
+        logger.warning(f"MongoDB patent fetch note: {e_mfetch}")
+
+    patent_map = {}
+    for p in (live_patents + recent_patents + seed_patents):
+        if p and p.patent_number:
+            patent_map[p.patent_number] = p
+
+    for mp in mongo_patents:
+        if mp and mp.patent_number and mp.patent_number not in patent_map:
+            patent_map[mp.patent_number] = mp
+
     all_patents = list(patent_map.values())
+
 
     if not all_patents:
         raise HTTPException(
@@ -201,7 +229,6 @@ def perform_prior_art_search(
         
         patent_emb = patent.embedding
         if isinstance(patent_emb, str):
-            import json
             patent_emb = json.loads(patent_emb)
 
         scores = compute_hybrid_score(
@@ -328,12 +355,12 @@ def perform_prior_art_search(
 
     total_matches_count = len(top_10)
 
-    pat_searched = api_stats.get("patents_searched") if api_stats.get("patents_searched") is not None else len(candidate_patents)
-    pat_retrieved = api_stats.get("patents_retrieved") if api_stats.get("patents_retrieved") is not None else 0
+    pat_searched: int = int(api_stats.get("patents_searched") or len(candidate_patents))
+    pat_retrieved: int = int(api_stats.get("patents_retrieved") or 0)
     pat_shortlisted = len(top_10)
     pat_deeply_analyzed = len(top_10)
 
-    lens_status = api_stats.get("lens_api_status", "LENS_OK")
+    lens_status: str = str(api_stats.get("lens_api_status") or "LENS_OK")
 
     # Structured Stage-by-Stage Retrieval Quality Logging & Single Search Trace
     logger.info("==================================================")
@@ -369,13 +396,16 @@ def perform_prior_art_search(
     except ImportError:
         from app.schemas.schemas import ScoreBreakdown, PipelineMetrics, PatentFamilyMember
 
+    pat_searched_val = int(pat_searched or 0)
+    pat_retrieved_val = int(pat_retrieved or 0)
+
     pipeline_metrics = PipelineMetrics(
-        patents_searched=pat_searched,
-        patents_retrieved=pat_retrieved,
-        lens_records_retrieved=pat_retrieved,
-        database_fallback_candidates=len(candidate_patents) if pat_retrieved == 0 else 0,
+        patents_searched=pat_searched_val,
+        patents_retrieved=pat_retrieved_val,
+        lens_records_retrieved=pat_retrieved_val,
+        database_fallback_candidates=len(candidate_patents) if pat_retrieved_val == 0 else 0,
         final_shortlisted=len(top_10),
-        total_candidates_evaluated=len(candidate_patents) + pat_retrieved,
+        total_candidates_evaluated=len(candidate_patents) + pat_retrieved_val,
         raw_candidates=len(candidate_patents),
         candidates_with_family_ids=candidates_with_family_ids_cnt,
         post_dedup_candidates=len(deduped_scored_items),
@@ -408,11 +438,16 @@ def perform_prior_art_search(
         patents_searched=pat_searched,
         patents_retrieved=pat_retrieved,
         patents_shortlisted=pat_shortlisted,
-        patents_deeply_analyzed=pat_deeply_analyzed
+        patents_deeply_analyzed=pat_deeply_analyzed,
+        pipeline_metrics=pipeline_metrics.model_dump(mode="json")
     )
-    db.add(search_record)
-    db.commit()
-    db.refresh(search_record)
+    try:
+        db.add(search_record)
+        db.commit()
+        db.refresh(search_record)
+    except Exception as e_sql_s:
+        logger.warning(f"SQL search record save note: {e_sql_s}")
+
 
     llm_service = get_llm_service()
     result_items_response = []
@@ -462,22 +497,13 @@ def perform_prior_art_search(
                 except Exception as e_fut:
                     logger.warning(f"Thread pool task timeout/error: {e_fut}")
 
+    raw_live_nums = api_stats.get("live_patent_numbers") if isinstance(api_stats, dict) else None
+    live_retrieved_set = set(raw_live_nums) if isinstance(raw_live_nums, (list, tuple, set)) else set()
+
     for idx, item in enumerate(top_10, start=1):
         pat = item["patent"]
         sc = item["scores"]
         res_status = "TECHNICALLY_RELEVANT"
-
-        sr = SearchResult(
-            search_id=search_record.id,
-            patent_id=pat.id,
-            semantic_score=sc["semantic_score"],
-            keyword_score=sc["keyword_score"],
-            domain_score=sc["domain_score"],
-            final_score=sc["final_score"],
-            matched_concepts=sc["matched_concepts"],
-            rank=idx
-        )
-        db.add(sr)
 
         f_score = sc["final_score"]
 
@@ -594,106 +620,214 @@ def perform_prior_art_search(
         tech_rel_conclusion = pair_analysis.get("technical_relevance_conclusion") or f"Technical feature overlap is {sc.get('raw_feature_coverage', 0.0)}% across {sc.get('matched_feature_count', 0)} matching limitations."
         legal_disclaimer = pair_analysis.get("legal_assessment_disclaimer") or "Preliminary AI screening only. Legal patentability is not determined by AI and requires formal patent attorney examination."
 
-        if pat_retrieved > 0:
+        # Per-candidate Provenance Determination
+        pat_num_str = (pat.patent_number or "").strip()
+        if pat_num_str in live_retrieved_set or (pat.source_status == "LIVE_API" and (pat.source_type or "").upper() == "THE LENS" and pat_retrieved > 0):
             item_source_status = "LIVE_API"
             item_source_name = "The Lens Patent API"
+            item_source_type = "THE LENS"
             item_retrieval_status = "LIVE_API_SUCCESS"
             doc_type_val = pat.document_type or "PATENT"
+        elif pat.source_status == "FALLBACK" or (pat.source_type and "USPTO" in pat.source_type.upper()):
+            item_source_status = "FALLBACK"
+            item_source_name = "PatentsView API (Fallback)"
+            item_source_type = pat.source_type or "USPTO"
+            item_retrieval_status = "FALLBACK_SUCCESS"
+            doc_type_val = pat.document_type or "PATENT"
+        elif (pat.source_type and "ARXIV" in pat.source_type.upper()) or pat_num_str.startswith("ARXIV"):
+            item_source_status = "LIVE_API"
+            item_source_name = "arXiv Open Feed"
+            item_source_type = "arXiv"
+            item_retrieval_status = "LIVE_API_SUCCESS"
+            doc_type_val = "NON-PATENT LITERATURE"
         else:
             item_source_status = "DATABASE"
             item_source_name = "Database Repository"
-            item_retrieval_status = "DATABASE_REPOSITORY_FALLBACK"
-            doc_type_val = "DATABASE RECORD"
+            item_source_type = "DATABASE"
+            item_retrieval_status = "DATABASE_REPOSITORY"
+            doc_type_val = "DATABASE RECORD" if (not pat.document_type or pat.document_type in ["PATENT", "DATABASE RECORD"]) else pat.document_type
 
         pat_out_obj = PatentOut.model_validate(pat)
         pat_out_obj.source_status = item_source_status
         pat_out_obj.source_name = item_source_name
         pat_out_obj.retrieval_status = item_retrieval_status
-        pat_out_obj.source_type = item_source_name.upper()
+        pat_out_obj.source_type = item_source_type
         pat_out_obj.document_type = doc_type_val
 
-        result_items_response.append(
-            SearchResultItem(
-                patent=pat_out_obj,
-                semantic_score=sc["semantic_score"],
-                keyword_score=sc["keyword_score"],
-                domain_score=sc["domain_score"],
-                final_score=sc["final_score"],
-                confidence_score=ev_conf_val,
-                matched_concepts=sc["matched_concepts"],
-                rank=idx,
-                semantic_similarity_label=get_similarity_level_label(sc["semantic_score"]),
-                relevance_explanation=pair_analysis.get("relevance_explanation"),
-                feature_comparison=pair_analysis.get("feature_comparison", []),
-                patent_specific_insights=pair_analysis.get("patent_specific_insights", []),
-                technical_features=pair_analysis.get("technical_features", gemini_features),
-                essential_features=gemini_essential,
-                optional_features=gemini_optional,
-                structured_quadruplets=gemini_quads,
-                distinctive_features=pair_analysis.get("distinctive_features", []),
-                matched_features=pair_analysis.get("matched_features", []),
-                strong_matches=sc.get("strong_matches", []),
-                partial_matches=sc.get("partial_matches", []),
-                weak_matches=sc.get("weak_matches", []),
-                missing_features=sc.get("missing_features", []),
-                unmatched_features=pair_analysis.get("unmatched_features", sc.get("missing_features", [])),
-                unverifiable_features=sc.get("unverifiable_features", []),
-                evidence_items=sc.get("evidence_items", []),
-                evidence_status_label=ev_status_lbl,
-                overlap_summary=pair_analysis.get("overlap_summary"),
-                claim_elements=pair_analysis.get("claim_elements", []),
-                single_document_anticipation=pair_analysis.get("single_document_anticipation", "NO"),
-                missing_elements=pair_analysis.get("missing_elements", []),
-                technical_feature_coverage=sc["keyword_score"],
-                evidence_confidence=ev_conf_val,
-                overall_result=overall_res,
-                score_breakdown=score_bd_obj,
-                family_members=[
-                    PatentFamilyMember(
-                        patent_number=pat.patent_number,
-                        jurisdiction=pat.jurisdiction or "US",
-                        kind="A1",
-                        title=pat.title,
-                        publication_date=pat.publication_date,
-                        document_type=doc_type_val,
-                        source_url=pat.source_url or ""
-                    )
-                ],
-                family_size=getattr(pat, "simple_family_size", 1) or 1,
-                is_family_representative=True,
-                family_id=getattr(pat, "simple_family_id", pat.patent_number) or pat.patent_number,
-                temporal_status=temporal_status,
-                result_status=res_status,
-                relevance_level=relevance_level,
-                evidence_status=ev_status,
-                evidence_availability_level=sc.get("evidence_availability_level", "NOT_VERIFIABLE"),
-                source_status=item_source_status,
-                source_name=item_source_name,
-                retrieval_status=item_retrieval_status,
-                feature_match_status=sc.get("feature_match_status", "PARTIAL"),
-                feature_match_source=sc.get("feature_match_source", "ABSTRACT/TITLE"),
-                raw_feature_coverage=round(((sc.get("matched_feature_count") or len(pair_analysis.get("matched_features", [])) or (len(sc.get("strong_matches", [])) + len(sc.get("partial_matches", [])))) / (sc.get("total_feature_count") or len(gemini_features) or 9)) * 100.0, 1) if (sc.get("total_feature_count") or len(gemini_features) or 9) > 0 else 0.0,
-                weighted_technical_score=sc.get("weighted_technical_score", sc["keyword_score"]),
-                matched_feature_count=sc.get("matched_feature_count") or len(pair_analysis.get("matched_features", [])) or (len(sc.get("strong_matches", [])) + len(sc.get("partial_matches", []))),
-                total_feature_count=sc.get("total_feature_count") or len(gemini_features) or 9,
-                claims_status=sc.get("claims_status", "AVAILABLE" if (pat.claims and len(pat.claims) > 20) else "NOT_AVAILABLE"),
-                full_text_status=sc.get("full_text_status", "AVAILABLE" if (pat.description and len(pat.description) > 100) else "NOT_AVAILABLE"),
-                has_abstract=bool(pat.abstract and len(pat.abstract) > 10),
-                has_claims=bool(pat.claims and len(pat.claims) > 20),
-                has_description=bool(pat.description and len(pat.description) > 50),
-                has_full_text=bool(pat.description and len(pat.description) > 50 and pat.claims and len(pat.claims) > 20),
-                score_cap=sb_dict.get("score_cap"),
-                score_cap_reason=sb_dict.get("score_cap_reason"),
-                verification_status="VERIFIED" if (ev_status == "VERIFIED" and has_verified_ev) else "NOT_VERIFIED",
-                data_quality_status=getattr(pat, "data_quality_status", "LIMITED") or "LIMITED",
-                technical_relevance_conclusion=tech_rel_conclusion,
-                evidence_confidence_conclusion=ev_conf_conclusion,
-                temporal_status_conclusion=temporal_conclusion,
-                legal_assessment_disclaimer=legal_disclaimer
-            )
+        matched_feat_count = sc.get("matched_feature_count") if sc.get("matched_feature_count") is not None else (len(pair_analysis.get("matched_features", [])) or (len(sc.get("strong_matches", [])) + len(sc.get("partial_matches", []))))
+        total_feat_count = sc.get("total_feature_count") if sc.get("total_feature_count") is not None else (len(gemini_features) or len(sc.get("target_atomic_features", [])) or 5)
+
+        # Requirement 11: If a candidate has zero verified technical feature matches, classify clearly as LOW TECHNICAL SIMILARITY / candidate only
+        if matched_feat_count == 0:
+            relevance_level = "LOW TECHNICAL SIMILARITY (Candidate Only)"
+            res_status = "LOW_TECHNICAL_SIMILARITY"
+            sem_label = "Low"
+        else:
+            sem_label = get_similarity_level_label(sc["semantic_score"])
+
+        # Requirement 12: If evidence is unavailable, show Evidence: UNAVAILABLE
+        c_status = sc.get("claims_status", "AVAILABLE" if (pat.claims and len(pat.claims) > 20) else "NOT_AVAILABLE")
+        f_status = sc.get("full_text_status", "AVAILABLE" if (pat.description and len(pat.description) > 100) else "NOT_AVAILABLE")
+        if c_status == "NOT_AVAILABLE" and f_status == "NOT_AVAILABLE":
+            ev_status_lbl = "Evidence: UNAVAILABLE"
+            ev_status = "UNAVAILABLE"
+            ev_avail_lvl = "NOT_AVAILABLE"
+        else:
+            ev_avail_lvl = sc.get("evidence_availability_level", "NOT_VERIFIABLE")
+
+        sri_item = SearchResultItem(
+            patent=pat_out_obj,
+            semantic_score=sc["semantic_score"],
+            keyword_score=sc["keyword_score"],
+            domain_score=sc["domain_score"],
+            final_score=sc["final_score"],
+            confidence_score=ev_conf_val,
+            matched_concepts=sc["matched_concepts"],
+            rank=idx,
+            semantic_similarity_label=sem_label,
+            relevance_explanation=pair_analysis.get("relevance_explanation"),
+            feature_comparison=pair_analysis.get("feature_comparison", []),
+            patent_specific_insights=pair_analysis.get("patent_specific_insights", []),
+            technical_features=pair_analysis.get("technical_features", gemini_features),
+            essential_features=gemini_essential,
+            optional_features=gemini_optional,
+            structured_quadruplets=gemini_quads,
+            distinctive_features=pair_analysis.get("distinctive_features", []),
+            matched_features=pair_analysis.get("matched_features", []),
+            strong_matches=sc.get("strong_matches", []),
+            partial_matches=sc.get("partial_matches", []),
+            weak_matches=sc.get("weak_matches", []),
+            missing_features=sc.get("missing_features", []),
+            unmatched_features=pair_analysis.get("unmatched_features", sc.get("missing_features", [])),
+            unverifiable_features=sc.get("unverifiable_features", []),
+            evidence_items=sc.get("evidence_items", []),
+            evidence_status_label=ev_status_lbl,
+            overlap_summary=pair_analysis.get("overlap_summary"),
+            claim_elements=pair_analysis.get("claim_elements", []),
+            single_document_anticipation=pair_analysis.get("single_document_anticipation", "NO"),
+            missing_elements=pair_analysis.get("missing_elements", []),
+            technical_feature_coverage=sc["keyword_score"],
+            evidence_confidence=ev_conf_val,
+            overall_result=overall_res,
+            score_breakdown=score_bd_obj,
+            family_members=[
+                PatentFamilyMember(
+                    patent_number=pat.patent_number,
+                    jurisdiction=pat.jurisdiction or "US",
+                    kind="A1",
+                    title=pat.title,
+                    publication_date=pat.publication_date,
+                    document_type=doc_type_val,
+                    source_url=pat.source_url or ""
+                )
+            ],
+            family_size=getattr(pat, "simple_family_size", 1) or 1,
+            is_family_representative=True,
+            family_id=getattr(pat, "simple_family_id", pat.patent_number) or pat.patent_number,
+            temporal_status=temporal_status,
+            result_status=res_status,
+            relevance_level=relevance_level,
+            evidence_status=ev_status,
+            evidence_availability_level=ev_avail_lvl,
+            source_status=item_source_status,
+            source_name=item_source_name,
+            retrieval_status=item_retrieval_status,
+            feature_match_status=sc.get("feature_match_status", "PARTIAL"),
+            feature_match_source=sc.get("feature_match_source", "ABSTRACT/TITLE"),
+            raw_feature_coverage=round(((matched_feat_count) / (total_feat_count if total_feat_count > 0 else 1)) * 100.0, 1),
+            weighted_technical_score=sc.get("weighted_technical_score", sc["keyword_score"]),
+            matched_feature_count=matched_feat_count,
+            total_feature_count=total_feat_count,
+            claims_status=c_status,
+            full_text_status=f_status,
+            has_abstract=bool(pat.abstract and len(pat.abstract) > 10),
+            has_claims=bool(pat.claims and len(pat.claims) > 20),
+            has_description=bool(pat.description and len(pat.description) > 50),
+            has_full_text=bool(pat.description and len(pat.description) > 50 and pat.claims and len(pat.claims) > 20),
+            score_cap=sb_dict.get("score_cap"),
+            score_cap_reason=sb_dict.get("score_cap_reason"),
+            verification_status="VERIFIED" if (ev_status == "VERIFIED" and has_verified_ev) else "NOT_VERIFIED",
+            data_quality_status=getattr(pat, "data_quality_status", "LIMITED") or "LIMITED",
+            technical_relevance_conclusion=tech_rel_conclusion,
+            evidence_confidence_conclusion=ev_conf_conclusion,
+            temporal_status_conclusion=temporal_conclusion,
+            legal_assessment_disclaimer=legal_disclaimer
         )
 
-    db.commit()
+        result_items_response.append(sri_item)
+
+        sr = SearchResult(
+            search_id=search_record.id,
+            patent_id=pat.id,
+            semantic_score=sc["semantic_score"],
+            keyword_score=sc["keyword_score"],
+            domain_score=sc["domain_score"],
+            final_score=sc["final_score"],
+            matched_concepts=sc["matched_concepts"],
+            rank=idx,
+            analysis_payload=sri_item.model_dump(mode="json")
+        )
+        try:
+            db.add(sr)
+            db.commit()
+        except Exception:
+            pass
+
+    # Save search record and embedded results to MongoDB Atlas SearchDoc
+    try:
+        from app.models.models import SearchDoc, SearchResultItem as MongoSRI
+        import asyncio
+
+        mongo_sris = []
+        for sri in result_items_response:
+            try:
+                mongo_sris.append(
+                    MongoSRI(
+                        id=str(sri.patent.id),
+                        patent_id=str(sri.patent.id),
+                        semantic_score=sri.semantic_score,
+                        keyword_score=sri.keyword_score,
+                        domain_score=sri.domain_score,
+                        final_score=sri.final_score,
+                        matched_concepts=sri.matched_concepts or [],
+                        rank=sri.rank,
+                        analysis_payload=sri.model_dump(mode="json")
+                    )
+                )
+            except Exception:
+                pass
+
+        s_doc = SearchDoc(
+            id=str(search_record.id),
+            user_id=str(current_user.id),
+            invention_title=request.title,
+            domain=request.domain,
+            problem_statement=request.problem_statement,
+            description=request.description,
+            keywords=request.keywords,
+            risk_level=risk_info["risk_level"],
+            highest_similarity=highest_similarity,
+            total_results=total_matches_count,
+            very_high_similarity=vhigh_count,
+            high_similarity=high_count,
+            moderate_similarity=mod_count,
+            low_similarity=low_count,
+            patents_searched=pat_searched,
+            patents_retrieved=pat_retrieved,
+            patents_shortlisted=pat_shortlisted,
+            patents_deeply_analyzed=pat_deeply_analyzed,
+            pipeline_metrics=pipeline_metrics.model_dump(mode="json"),
+            results=mongo_sris
+        )
+        try:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(s_doc.insert())
+        except Exception:
+            asyncio.run(s_doc.insert())
+        logger.info(f"✅ Successfully persisted SearchDoc '{search_record.id}' to MongoDB Atlas!")
+    except Exception as e_mongo_save:
+        logger.warning(f"MongoDB SearchDoc save note: {e_mongo_save}")
+
 
     summary = SearchSummary(
         total_results=total_matches_count,
@@ -775,13 +909,53 @@ def get_user_search_history(
     db: Session = Depends(get_db)
 ):
     """Retrieve search history for the authenticated user."""
-    searches = (
-        db.query(Search)
-        .filter(Search.user_id == current_user.id)
-        .order_by(Search.created_at.desc())
-        .all()
-    )
-    return [SearchHistoryItem.model_validate(s) for s in searches]
+    searches = []
+    try:
+        searches = (
+            db.query(Search)
+            .filter(Search.user_id == current_user.id)
+            .order_by(Search.created_at.desc())
+            .all()
+        )
+    except Exception:
+        pass
+
+    if searches:
+        return [SearchHistoryItem.model_validate(s) for s in searches]
+
+    # Fallback to MongoDB SearchDoc
+    try:
+        from app.models.models import SearchDoc
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            mongo_searches = loop.run_until_complete(
+                SearchDoc.find(SearchDoc.user_id == current_user.id).sort("-created_at").to_list()
+            )
+        except Exception:
+            mongo_searches = asyncio.run(
+                SearchDoc.find(SearchDoc.user_id == current_user.id).sort("-created_at").to_list()
+            )
+
+        if mongo_searches:
+            history_list = []
+            for ms in mongo_searches:
+                history_list.append(
+                    SearchHistoryItem(
+                        id=str(ms.id),
+                        invention_title=ms.invention_title,
+                        domain=ms.domain,
+                        risk_level=ms.risk_level,
+                        highest_similarity=ms.highest_similarity,
+                        total_results=ms.total_results,
+                        created_at=ms.created_at
+                    )
+                )
+            return history_list
+    except Exception:
+        pass
+
+    return []
 
 @router.get("/{search_id}", response_model=PriorArtSearchResponse)
 def get_search_details(
@@ -790,8 +964,76 @@ def get_search_details(
     db: Session = Depends(get_db)
 ):
     """Retrieve search results by search_id."""
-    search = db.query(Search).filter(Search.id == search_id).first()
+    import logging
+    logger = logging.getLogger("patentlens.search")
+
+    search = None
+    try:
+        search = db.query(Search).filter(Search.id == search_id).first()
+    except Exception:
+        pass
+
     if not search:
+        # Fallback to MongoDB SearchDoc
+        try:
+            from app.models.models import SearchDoc
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                mongo_s = loop.run_until_complete(SearchDoc.find_one(SearchDoc.id == search_id))
+            except Exception:
+                mongo_s = asyncio.run(SearchDoc.find_one(SearchDoc.id == search_id))
+
+            if mongo_s:
+                res_items = []
+                for r_sub in mongo_s.results:
+                    if r_sub.analysis_payload and isinstance(r_sub.analysis_payload, dict):
+                        try:
+                            res_items.append(SearchResultItem.model_validate(r_sub.analysis_payload))
+                        except Exception:
+                            pass
+
+                risk_info = classify_prior_art_risk(mongo_s.highest_similarity)
+                pipe_metrics_obj = None
+                if mongo_s.pipeline_metrics:
+                    try:
+                        from app.schemas.schemas import PipelineMetrics
+                        pipe_metrics_obj = PipelineMetrics.model_validate(mongo_s.pipeline_metrics)
+                    except Exception:
+                        pass
+
+                summary = SearchSummary(
+                    total_results=mongo_s.total_results,
+                    high_similarity=mongo_s.high_similarity,
+                    moderate_similarity=mongo_s.moderate_similarity,
+                    low_similarity=mongo_s.low_similarity,
+                    very_high_similarity=mongo_s.very_high_similarity,
+                    patents_searched=mongo_s.patents_searched,
+                    patents_retrieved=mongo_s.patents_retrieved,
+                    patents_shortlisted=mongo_s.patents_shortlisted,
+                    patents_deeply_analyzed=mongo_s.patents_deeply_analyzed,
+                    highest_semantic_similarity=mongo_s.highest_similarity,
+                    pipeline_metrics=pipe_metrics_obj
+                )
+
+                return PriorArtSearchResponse(
+                    search_id=str(mongo_s.id),
+                    invention_title=mongo_s.invention_title,
+                    domain=mongo_s.domain,
+                    created_at=mongo_s.created_at,
+                    risk_level=mongo_s.risk_level,
+                    risk_label=risk_info["label"],
+                    highest_similarity=mongo_s.highest_similarity,
+                    highest_semantic_similarity=mongo_s.highest_similarity,
+                    summary=summary,
+                    results=res_items,
+                    is_demo_dataset=True,
+                    data_source="Database Repository (MongoDB)",
+                    ai_model_used="Gemini 3.5 Flash"
+                )
+        except Exception as e_mget:
+            logger.warning(f"MongoDB search details fallback note: {e_mget}")
+
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Search record not found.")
 
     results_db = (
@@ -800,6 +1042,7 @@ def get_search_details(
         .order_by(SearchResult.rank.asc())
         .all()
     )
+
 
     llm_service = get_llm_service()
     result_items = []
@@ -820,6 +1063,14 @@ def get_search_details(
         else:
             low_count += 1
 
+        if r.analysis_payload and isinstance(r.analysis_payload, dict):
+            try:
+                item_obj = SearchResultItem.model_validate(r.analysis_payload)
+                result_items.append(item_obj)
+                continue
+            except Exception as e_payload:
+                logger.warning(f"Error parsing saved analysis_payload for patent {r.patent_id}: {e_payload}")
+
         try:
             from app.services.gemini_service import gemini_service
         except ImportError:
@@ -836,9 +1087,43 @@ def get_search_details(
             )
         )
 
+        pat_obj = r.patent
+        pat_num_str = (pat_obj.patent_number or "").strip()
+        if (search.patents_retrieved or 0) > 0 and pat_obj.source_status == "LIVE_API" and (pat_obj.source_type or "").upper() == "THE LENS":
+            item_src_status = "LIVE_API"
+            item_src_name = "The Lens Patent API"
+            item_src_type = "THE LENS"
+            item_ret_status = "LIVE_API_SUCCESS"
+            doc_type_val = pat_obj.document_type or "PATENT"
+        elif pat_obj.source_status == "FALLBACK" or (pat_obj.source_type and "USPTO" in pat_obj.source_type.upper()):
+            item_src_status = "FALLBACK"
+            item_src_name = "PatentsView API (Fallback)"
+            item_src_type = pat_obj.source_type or "USPTO"
+            item_ret_status = "FALLBACK_SUCCESS"
+            doc_type_val = pat_obj.document_type or "PATENT"
+        elif (pat_obj.source_type and "ARXIV" in pat_obj.source_type.upper()) or pat_num_str.startswith("ARXIV"):
+            item_src_status = "LIVE_API"
+            item_src_name = "arXiv Open Feed"
+            item_src_type = "arXiv"
+            item_ret_status = "LIVE_API_SUCCESS"
+            doc_type_val = "NON-PATENT LITERATURE"
+        else:
+            item_src_status = "DATABASE"
+            item_src_name = "Database Repository"
+            item_src_type = "DATABASE"
+            item_ret_status = "DATABASE_REPOSITORY"
+            doc_type_val = "DATABASE RECORD" if (not pat_obj.document_type or pat_obj.document_type in ["PATENT", "DATABASE RECORD"]) else pat_obj.document_type
+
+        pat_out = PatentOut.model_validate(pat_obj)
+        pat_out.source_status = item_src_status
+        pat_out.source_name = item_src_name
+        pat_out.source_type = item_src_type
+        pat_out.retrieval_status = item_ret_status
+        pat_out.document_type = doc_type_val
+
         result_items.append(
             SearchResultItem(
-                patent=PatentOut.model_validate(r.patent),
+                patent=pat_out,
                 semantic_score=r.semantic_score,
                 keyword_score=r.keyword_score,
                 domain_score=r.domain_score,
@@ -859,7 +1144,10 @@ def get_search_details(
                 missing_elements=pair_analysis.get("missing_elements", []),
                 technical_feature_coverage=pair_analysis.get("technical_feature_coverage", 0.0),
                 evidence_confidence=pair_analysis.get("evidence_confidence", 0.0),
-                overall_result=pair_analysis.get("overall_result", "NON_ANTICIPATED")
+                overall_result=pair_analysis.get("overall_result", "NON_ANTICIPATED"),
+                source_status=item_src_status,
+                source_name=item_src_name,
+                retrieval_status=item_ret_status
             )
         )
 
@@ -872,30 +1160,42 @@ def get_search_details(
     low_val = low_count
     tot_val = vhigh_val + high_val + mod_val + low_val
 
+    pipe_metrics_obj = None
+    if search.pipeline_metrics:
+        try:
+            from app.schemas.schemas import PipelineMetrics
+            import json
+            pm_data = json.loads(search.pipeline_metrics) if isinstance(search.pipeline_metrics, str) else search.pipeline_metrics
+            if isinstance(pm_data, dict):
+                pipe_metrics_obj = PipelineMetrics.model_validate(pm_data)
+        except Exception as e_pm:
+            logger.warning(f"Error parsing pipeline_metrics: {e_pm}")
+
     summary = SearchSummary(
         total_results=tot_val,
         high_similarity=high_val,
         moderate_similarity=mod_val,
         low_similarity=low_val,
         very_high_similarity=vhigh_val,
-        patents_searched=search.patents_searched or tot_val,
-        patents_retrieved=search.patents_retrieved or 0,
-        patents_shortlisted=search.patents_shortlisted or tot_val,
-        patents_deeply_analyzed=search.patents_deeply_analyzed or tot_val,
-        highest_semantic_similarity=highest_semantic
+        patents_searched=int(search.patents_searched or tot_val),
+        patents_retrieved=int(search.patents_retrieved or 0),
+        patents_shortlisted=int(search.patents_shortlisted or tot_val),
+        patents_deeply_analyzed=int(search.patents_deeply_analyzed or tot_val),
+        highest_semantic_similarity=highest_semantic,
+        pipeline_metrics=pipe_metrics_obj
     )
 
-    active_data_source = "Live arXiv & CrossRef Feed" if (search.patents_retrieved or 0) > 0 else "Cached Patent Repository"
+    active_data_source = "The Lens Patent API (Live API)" if (search.patents_retrieved or 0) > 0 else "Database Repository"
     active_ai_model = getattr(llm_service, "model_name", "Gemini 2.5 Flash")
 
     return PriorArtSearchResponse(
-        search_id=search.id,
-        invention_title=search.invention_title,
-        domain=search.domain,
+        search_id=str(search.id),
+        invention_title=str(search.invention_title),
+        domain=str(search.domain),
         created_at=search.created_at,
         risk_level=risk_info["risk_level"],
         risk_label=risk_info["label"],
-        highest_similarity=search.highest_similarity,
+        highest_similarity=float(search.highest_similarity),
         highest_semantic_similarity=highest_semantic,
         summary=summary,
         results=result_items,
@@ -915,7 +1215,7 @@ def delete_search_record(
     if not search:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Search record not found.")
 
-    if search.user_id != current_user.id:
+    if str(search.user_id) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized access.")
 
     db.delete(search)

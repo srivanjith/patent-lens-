@@ -64,16 +64,40 @@ def decode_token(token: str, secret: str) -> dict:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+async def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     """Dependency to retrieve current authenticated user from JWT bearer token."""
     if token and token.strip() and token.strip().lower() not in ["null", "undefined", "none", "bearer"]:
         try:
             payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
-            user_id: str = payload.get("sub")
-            if user_id and payload.get("type") == "access":
-                user = db.query(User).filter(User.id == user_id).first()
-                if user:
-                    return user
+            user_id_raw = payload.get("sub")
+            if user_id_raw and payload.get("type") == "access":
+                user_id = str(user_id_raw)
+                try:
+                    user = db.query(User).filter(User.id == user_id).first()
+                    if user:
+                        return user
+                except Exception:
+                    pass
+
+                # Fallback / Dual check against MongoDB UserDoc
+                try:
+                    from app.models.models import UserDoc
+                    mongo_user = await UserDoc.find_one(UserDoc.id == user_id)
+
+                    if mongo_user:
+                        return User(
+                            id=str(mongo_user.id),
+                            name=mongo_user.name,
+                            email=mongo_user.email,
+                            password_hash=mongo_user.password_hash,
+                            is_verified=mongo_user.is_verified,
+                            otp_code=mongo_user.otp_code,
+                            otp_expires_at=mongo_user.otp_expires_at,
+                            created_at=mongo_user.created_at,
+                            updated_at=mongo_user.updated_at
+                        )
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -82,3 +106,4 @@ def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session 
         detail="Authentication credentials required. Please sign in with your email & password or Google.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+

@@ -94,12 +94,19 @@ def generate_pdf_report(search: Search, results: list) -> str:
     elements.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#2563EB'), spaceAfter=15))
 
     # 2. Metadata Table
+    inv_title_str = str(getattr(search, "invention_title", "") or "")
+    domain_str = str(getattr(search, "domain", "") or "")
+    created_at_val = getattr(search, "created_at", None)
+    date_str = created_at_val.strftime("%Y-%m-%d %H:%M UTC") if (created_at_val is not None and hasattr(created_at_val, "strftime")) else str(created_at_val or "")
+    risk_lvl_str = str(getattr(search, "risk_level", "") or "")
+    highest_sim_val = getattr(search, "highest_similarity", 0.0)
+
     meta_data = [
-        [Paragraph("<b>Invention Title:</b>", body_style), Paragraph(search.invention_title, body_style)],
-        [Paragraph("<b>Technology Domain:</b>", body_style), Paragraph(search.domain, body_style)],
-        [Paragraph("<b>Search Date:</b>", body_style), Paragraph(search.created_at.strftime("%Y-%m-%d %H:%M UTC"), body_style)],
-        [Paragraph("<b>Prior-Art Risk Level:</b>", body_style), Paragraph(f"<font color='#DC2626'><b>{search.risk_level}</b></font>", body_style)],
-        [Paragraph("<b>Highest Similarity Score:</b>", body_style), Paragraph(f"<b>{search.highest_similarity}%</b>", body_style)],
+        [Paragraph("<b>Invention Title:</b>", body_style), Paragraph(inv_title_str, body_style)],
+        [Paragraph("<b>Technology Domain:</b>", body_style), Paragraph(domain_str, body_style)],
+        [Paragraph("<b>Search Date:</b>", body_style), Paragraph(date_str, body_style)],
+        [Paragraph("<b>Prior-Art Risk Level:</b>", body_style), Paragraph(f"<font color='#DC2626'><b>{risk_lvl_str}</b></font>", body_style)],
+        [Paragraph("<b>Highest Similarity Score:</b>", body_style), Paragraph(f"<b>{highest_sim_val}%</b>", body_style)],
     ]
     t_meta = Table(meta_data, colWidths=[140, 390])
     t_meta.setStyle(TableStyle([
@@ -111,13 +118,17 @@ def generate_pdf_report(search: Search, results: list) -> str:
     elements.append(Spacer(1, 15))
 
     # 3. Invention Summary
+    problem_stmt_str = str(getattr(search, "problem_statement", "") or "")
+    desc_str = str(getattr(search, "description", "") or "")
+    keywords_val = getattr(search, "keywords", None)
+
     elements.append(Paragraph("Invention Summary & Problem Solved", section_style))
-    elements.append(Paragraph(f"<b>Problem Statement:</b> {search.problem_statement}", body_style))
+    elements.append(Paragraph(f"<b>Problem Statement:</b> {problem_stmt_str}", body_style))
     elements.append(Spacer(1, 4))
-    elements.append(Paragraph(f"<b>Detailed Description:</b> {search.description}", body_style))
-    if search.keywords:
+    elements.append(Paragraph(f"<b>Detailed Description:</b> {desc_str}", body_style))
+    if keywords_val and isinstance(keywords_val, (list, tuple)):
         elements.append(Spacer(1, 4))
-        kw_str = ", ".join(search.keywords)
+        kw_str = ", ".join([str(k) for k in keywords_val])
         elements.append(Paragraph(f"<b>User Keywords:</b> {kw_str}", body_style))
     elements.append(Spacer(1, 15))
 

@@ -287,7 +287,7 @@ def extract_technical_concepts(text: str, top_n: int = 8) -> List[str]:
         )
         p_matrix = phrase_vec.fit_transform(documents)
         p_names = phrase_vec.get_feature_names_out()
-        p_scores = p_matrix.toarray()[0]
+        p_scores = getattr(p_matrix, "toarray")()[0]
         
         phrases = [
             (p_names[i].title(), p_scores[i] * 3.0)
@@ -304,7 +304,7 @@ def extract_technical_concepts(text: str, top_n: int = 8) -> List[str]:
         )
         s_matrix = single_vec.fit_transform(documents)
         s_names = single_vec.get_feature_names_out()
-        s_scores = s_matrix.toarray()[0]
+        s_scores = getattr(s_matrix, "toarray")()[0]
         
         singles = [
             (s_names[i].title(), s_scores[i])

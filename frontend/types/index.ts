@@ -155,7 +155,11 @@ export interface SearchResultItem {
   temporal_status?: 'BEFORE_REFERENCE_DATE' | 'AFTER_REFERENCE_DATE' | 'DATE_UNKNOWN' | string;
   result_status?: string;
   relevance_level?: string;
-  evidence_status?: 'VERIFIED' | 'PARTIAL' | 'NOT_VERIFIED' | 'NOT_AVAILABLE';
+  evidence_status?: 'VERIFIED' | 'PARTIAL' | 'NOT_VERIFIED' | 'NOT_AVAILABLE' | 'UNAVAILABLE' | string;
+  source_status?: string;
+  source_name?: string;
+  source_type?: string;
+  retrieval_status?: string;
   raw_feature_coverage?: number;
   weighted_technical_score?: number;
   matched_feature_count?: number;
