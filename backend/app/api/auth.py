@@ -310,7 +310,7 @@ async def google_auth(request: GoogleAuthRequest, response: Response, db: Sessio
 
     is_verified = _get_bool(user_obj.is_verified)
     user_id = _get_str(user_obj.id)
-    user_name = _get_str(user_obj.name)
+    user_name = _get_str(user_obj.name) or name
     created_at = _get_dt(user_obj.created_at)
 
     if not is_verified:
