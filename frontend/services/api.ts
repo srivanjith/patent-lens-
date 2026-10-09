@@ -61,11 +61,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   if (!response.ok) {
     if (response.status === 401 && typeof window !== "undefined") {
-      setStoredToken(null);
-      const pathname = window.location.pathname;
-      if (pathname !== "/login" && pathname !== "/register" && pathname !== "/") {
-        window.location.href = "/login";
-      }
+      // Do not hard reload window.location on 401 to prevent infinite redirect loops
     }
     const errorMsg = data.detail || data.message || `API request failed with status ${response.status}`;
     throw new Error(errorMsg);
