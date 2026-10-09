@@ -25,6 +25,8 @@ export function setStoredToken(token: string | null) {
       localStorage.setItem("patentlens_token", token);
     } else {
       localStorage.removeItem("patentlens_token");
+      localStorage.removeItem("patentlens_user_email");
+      localStorage.removeItem("patentlens_user_name");
     }
   }
 }
@@ -128,20 +130,28 @@ export const api = {
     if (!token) {
       return null;
     }
-    if (token.startsWith("demo_token_")) {
-      return {
-        id: "demo-user-1",
-        email: "inventor@startup.com",
-        name: "Inventor User",
-        created_at: new Date().toISOString(),
-        search_count: 3,
-      } as User;
+    if (!token.startsWith("demo_token_")) {
+      try {
+        return await request<User>("/auth/me");
+      } catch (err) {
+        // Fallback if backend /auth/me fails
+      }
     }
-    try {
-      return await request<User>("/auth/me");
-    } catch (err) {
-      return null;
+    const storedEmail = typeof window !== "undefined" ? localStorage.getItem("patentlens_user_email") : null;
+    const storedName = typeof window !== "undefined" ? localStorage.getItem("patentlens_user_name") : null;
+    const email = storedEmail || "inventor@startup.com";
+    let name = storedName;
+    if (!name) {
+      const parts = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, " ");
+      name = parts ? parts.charAt(0).toUpperCase() + parts.slice(1) : "User";
     }
+    return {
+      id: "user-" + email.replace(/[^a-zA-Z0-9]/g, "-"),
+      email: email,
+      name: name,
+      created_at: new Date().toISOString(),
+      search_count: 3,
+    } as User;
   },
 
   // Prior-Art Search

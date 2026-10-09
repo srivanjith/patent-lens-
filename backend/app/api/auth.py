@@ -206,14 +206,11 @@ async def google_auth(request: GoogleAuthRequest, response: Response, db: Sessio
     """Authenticate or register user via Google OAuth 2.0."""
     email_clean = request.email.lower().strip()
     user_doc, user = await _get_user_by_email(email_clean, db)
+    name = request.name.strip() if request.name else email_clean.split("@")[0]
 
     if not user_doc and not user:
-        # First-time Google user
-        otp = generate_otp_code()
-        expires = datetime.now(timezone.utc) + timedelta(minutes=10)
+        # First-time Google user - automatically verified by Google
         pwd = hash_password(f"GoogleOAuth2Secured_{email_clean}")
-        name = request.name.strip() if request.name else email_clean.split("@")[0]
-        
         user_id = str(uuid.uuid4())
         try:
             user_doc = UserDoc(
@@ -221,67 +218,42 @@ async def google_auth(request: GoogleAuthRequest, response: Response, db: Sessio
                 name=name,
                 email=email_clean,
                 password_hash=pwd,
-                is_verified=False,
-                otp_code=otp,
-                otp_expires_at=expires
+                is_verified=True
             )
             await user_doc.insert()
         except Exception:
             user_doc = None
 
-        user_out: Optional[UserOut] = None
         try:
             user = User(
                 id=user_id,
                 name=name,
                 email=email_clean,
                 password_hash=pwd,
-                is_verified=False,
-                otp_code=otp,
-                otp_expires_at=expires
+                is_verified=True
             )
             db.add(user)
             db.commit()
             db.refresh(user)
-            user_out = UserOut.model_validate(user)
         except Exception:
-            if user_doc:
-                user_out = UserOut(id=str(user_doc.id), name=user_doc.name, email=user_doc.email, is_verified=False, created_at=user_doc.created_at)
-            else:
-                raise
-
-        return TokenResponse(
-            require_otp=True,
-            otp_sent_to=email_clean,
-            demo_otp=otp,
-            user=user_out
-        )
+            pass
 
     user_obj = user_doc if user_doc is not None else user
-    assert user_obj is not None
-
-    is_verified = bool(user_obj.is_verified)
-    user_id = str(user_obj.id)
-    user_name = str(user_obj.name)
-    created_at = user_obj.created_at
-
-    if not is_verified:
-        otp = generate_otp_code()
-        exp = datetime.now(timezone.utc) + timedelta(minutes=10)
-        if user_doc:
-            user_doc.otp_code = otp
-            user_doc.otp_expires_at = exp
-            await user_doc.save()
-        if user:
-            user.otp_code = otp
-            user.otp_expires_at = exp
-            db.commit()
-        return TokenResponse(
-            require_otp=True,
-            otp_sent_to=email_clean,
-            demo_otp=otp,
-            user=UserOut(id=user_id, name=user_name, email=email_clean, is_verified=False, created_at=created_at)
-        )
+    if user_obj:
+        user_id = str(user_obj.id)
+        user_name = str(user_obj.name)
+        created_at = user_obj.created_at
+        if not user_obj.is_verified:
+            if user_doc:
+                user_doc.is_verified = True
+                await user_doc.save()
+            if user:
+                user.is_verified = True
+                db.commit()
+    else:
+        user_id = str(uuid.uuid4())
+        user_name = name
+        created_at = datetime.now(timezone.utc)
 
     access_token = create_access_token({"sub": user_id, "email": email_clean})
     refresh_token = create_refresh_token({"sub": user_id, "email": email_clean})

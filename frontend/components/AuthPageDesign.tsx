@@ -161,6 +161,10 @@ export default function AuthPageDesign({
         }
 
         if (loggedIn) {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("patentlens_user_email", email);
+            localStorage.setItem("patentlens_user_name", email.split("@")[0]);
+          }
           if (authRes?.require_otp) {
             const activeOtpCode =
               authRes.demo_otp && String(authRes.demo_otp).length === 6
@@ -288,8 +292,13 @@ export default function AuthPageDesign({
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
 
-      const fullName = user.displayName || "Google User";
+      const fullName = user.displayName || user.email?.split("@")[0] || "Google User";
       const userEmail = user.email || "user@google.com";
+
+      if (typeof window !== "undefined") {
+        localStorage.setItem("patentlens_user_email", userEmail);
+        localStorage.setItem("patentlens_user_name", fullName);
+      }
 
       let authRes: any = null;
       try {
@@ -316,7 +325,7 @@ export default function AuthPageDesign({
       }
 
       setIsSuccess(true);
-      setSuccessMsg("Google Sign-In successful!");
+      setSuccessMsg(`Logged in as ${userEmail}! Redirecting...`);
       setTimeout(() => router.push("/dashboard"), 800);
     } catch (err: any) {
       console.warn("Google OAuth error:", err);
@@ -340,6 +349,10 @@ export default function AuthPageDesign({
   const handleFillDemo = () => {
     setEmail("inventor@startup.com");
     setPassword("password123");
+    if (typeof window !== "undefined") {
+      localStorage.setItem("patentlens_user_email", "inventor@startup.com");
+      localStorage.setItem("patentlens_user_name", "Inventor User");
+    }
     setError(null);
     setSuccessMsg(null);
   };
