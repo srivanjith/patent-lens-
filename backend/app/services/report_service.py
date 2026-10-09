@@ -156,20 +156,27 @@ def generate_pdf_report(search: Search, results: list) -> str:
         ]
     ]
 
+    def _get_val(obj, key, default=""):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default) if getattr(obj, key, default) is not None else default
+
     for item in results[:5]:
-        pat = item.patent if hasattr(item, "patent") else item.get("patent")
-        pat_num = pat.patent_number if hasattr(pat, "patent_number") else pat.get("patent_number")
-        pat_title = pat.title if hasattr(pat, "title") else pat.get("title")
-        pat_domain = pat.domain if hasattr(pat, "domain") else pat.get("domain")
-        rank_val = getattr(item, "rank", 1)
-        sem_val = getattr(item, "semantic_score", 0.0)
-        final_val = getattr(item, "final_score", 0.0)
+        pat = _get_val(item, "patent", None)
+        pat_num = _get_val(pat, "patent_number", "Unknown")
+        pat_title = _get_val(pat, "title", "Untitled Patent")
+        pat_domain = _get_val(pat, "domain", "General")
+        rank_val = _get_val(item, "rank", 1)
+        sem_val = _get_val(item, "semantic_score", 0.0)
+        final_val = _get_val(item, "final_score", 0.0)
 
         p_info = f"<b>{pat_num}</b><br/>{pat_title}"
         table_data.append([
             Paragraph(f"#{rank_val}", body_style),
             Paragraph(p_info, body_style),
-            Paragraph(pat_domain, body_style),
+            Paragraph(str(pat_domain), body_style),
             Paragraph(f"{sem_val}%", body_style),
             Paragraph(f"<b>{final_val}%</b>", body_style)
         ])

@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import os
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -24,7 +24,7 @@ async def create_report_for_search(
 
     # 1. Check MongoDB SearchDoc
     try:
-        search_doc = await SearchDoc.find_one(SearchDoc.id == search_id)
+        search_doc = await SearchDoc.find_one(SearchDoc.id == search_id)  # type: ignore # pyright: ignore
         if search_doc:
             if str(search_doc.user_id) != str(current_user.id):
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized access.")
@@ -56,16 +56,16 @@ async def create_report_for_search(
 
     # Save report entry
     try:
-        r_doc = ReportDoc(
+        r_doc = ReportDoc(  # type: ignore # pyright: ignore
             user_id=str(current_user.id),
             search_id=search_id,
             report_path=pdf_path
         )
-        await r_doc.insert()
+        await r_doc.insert()  # type: ignore # pyright: ignore
         return ReportOut(
-            id=str(r_doc.id),
-            search_id=r_doc.search_id,
-            report_path=r_doc.report_path,
+            id=str(r_doc.id or ""),
+            search_id=str(r_doc.search_id or search_id),
+            report_path=str(r_doc.report_path or pdf_path),
             created_at=r_doc.created_at
         )
     except Exception:
@@ -91,13 +91,13 @@ async def get_user_reports(
 ):
     """Retrieve report catalog for the current user."""
     try:
-        report_docs = await ReportDoc.find(ReportDoc.user_id == str(current_user.id)).sort("-created_at").to_list()
+        report_docs = await ReportDoc.find(ReportDoc.user_id == str(current_user.id)).sort("-created_at").to_list()  # type: ignore # pyright: ignore
         if report_docs:
             return [
                 ReportOut(
-                    id=str(r.id),
-                    search_id=r.search_id,
-                    report_path=r.report_path,
+                    id=str(r.id or ""),
+                    search_id=str(r.search_id or ""),
+                    report_path=str(r.report_path or ""),
                     created_at=r.created_at
                 ) for r in report_docs
             ]
@@ -121,14 +121,14 @@ async def download_report_file(
     db: Session = Depends(get_db)
 ):
     """Download generated PDF report file."""
-    report_path = None
-    user_id = None
+    report_path: Optional[str] = None
+    user_id: Optional[str] = None
 
     try:
-        rd = await ReportDoc.find_one(ReportDoc.id == report_id)
+        rd = await ReportDoc.find_one(ReportDoc.id == report_id)  # type: ignore # pyright: ignore
         if rd:
             user_id = str(rd.user_id)
-            report_path = rd.report_path
+            report_path = str(rd.report_path)
     except Exception:
         pass
 
@@ -136,7 +136,7 @@ async def download_report_file(
         report = db.query(Report).filter(Report.id == report_id).first()
         if report:
             user_id = str(report.user_id)
-            report_path = report.report_path
+            report_path = str(report.report_path)
 
     if not report_path:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found.")
