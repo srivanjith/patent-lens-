@@ -316,13 +316,10 @@ export default function AuthPageDesign({
 
       if (errCode === "auth/unauthorized-domain" || errMsg.includes("unauthorized-domain")) {
         if (!userEmail || !userEmail.includes("@")) {
-          const promptEmail = window.prompt("Enter your Google email address to sign in:");
-          if (!promptEmail || !promptEmail.includes("@")) {
-            setLoading(false);
-            setError("Google sign-in requires a valid email address.");
-            return;
-          }
-          userEmail = promptEmail.trim().toLowerCase();
+          setLoading(false);
+          setError("Domain Unauthorized: Add 'frontend-oxiu.vercel.app' to Firebase Console > Authentication > Settings > Authorized domains. Or enter your email above and click 'Continue with Google'.");
+          triggerErrorEffects();
+          return;
         }
         if (!fullName) {
           fullName = userEmail.split("@")[0];
