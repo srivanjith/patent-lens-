@@ -116,11 +116,11 @@ export interface EvidenceItem {
 }
 
 export interface SearchResultItem {
-  confidence_score: number | undefined;
-  legal_assessment_disclaimer: string;
-  evidence_confidence_conclusion: string;
-  temporal_status_conclusion: string;
-  technical_relevance_conclusion: string | undefined;
+  confidence_score?: number;
+  legal_assessment_disclaimer?: string;
+  evidence_confidence_conclusion?: string;
+  temporal_status_conclusion?: string;
+  technical_relevance_conclusion?: string;
   patent: Patent;
   semantic_score: number;
   keyword_score: number;
