@@ -105,6 +105,7 @@ class PatentOut(BaseModel):
     citations_count: Optional[int] = 0
     cited_by_count: Optional[int] = 0
     data_quality_status: Optional[str] = "LIMITED"
+    created_at: Optional[datetime] = None
 
 
 class CreateCustomPatentRequest(BaseModel):

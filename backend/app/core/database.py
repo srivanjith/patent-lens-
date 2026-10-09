@@ -31,6 +31,10 @@ if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres
     if not any(x in db_url for x in ["+psycopg2", "+psycopg", "+asyncpg", "+pg8000"]):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1).replace("postgres://", "postgresql+psycopg2://", 1)
 
+is_vercel = os.getenv("VERCEL") == "1" or os.getenv("NOW_REGION") is not None
+sqlite_dir = "/tmp" if (is_production or is_vercel) else "."
+SQLITE_URL = f"sqlite:///{os.path.normpath(os.path.join(sqlite_dir, 'patentlens.db'))}"
+
 if IS_POSTGRES:
     logger.info("Database backend: PostgreSQL")
     logger.info(f"Database host: {_get_masked_db_url(db_url)}")
@@ -54,11 +58,9 @@ if IS_POSTGRES:
     except Exception as e:
         logger.warning(f"PostgreSQL connection failed ({_get_masked_db_url(db_url)}: {e}). Switching to SQLite fallback.")
         IS_POSTGRES = False
-        SQLITE_URL = "sqlite:///./patentlens.db"
         engine = create_engine(SQLITE_URL, connect_args={"check_same_thread": False})
 else:
     logger.info("Database backend: SQLite (Development/Testing)")
-    SQLITE_URL = "sqlite:///./patentlens.db"
     engine = create_engine(
         SQLITE_URL,
         connect_args={"check_same_thread": False}
@@ -179,10 +181,11 @@ async def init_mongo():
         from beanie import init_beanie
         from app.models.models import UserDoc, PatentDoc, SearchDoc, SavedPatentDoc, ReportDoc
 
+        from typing import Any, cast
         logger.info(f"Initializing MongoDB connection to {db_name}...")
         mongo_client = AsyncIOMotorClient(mongo_url)
         await init_beanie(
-            database=mongo_client[db_name],
+            database=cast(Any, mongo_client[db_name]),
             document_models=[UserDoc, PatentDoc, SearchDoc, SavedPatentDoc, ReportDoc]
         )
         logger.info("MongoDB & Beanie Document ORM initialized successfully.")

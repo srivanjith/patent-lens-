@@ -958,7 +958,7 @@ def get_user_search_history(
     return []
 
 @router.get("/{search_id}", response_model=PriorArtSearchResponse)
-def get_search_details(
+async def get_search_details(
     search_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -968,21 +968,17 @@ def get_search_details(
     logger = logging.getLogger("patentlens.search")
 
     search = None
-    try:
-        search = db.query(Search).filter(Search.id == search_id).first()
-    except Exception:
-        pass
+    if db:
+        try:
+            search = db.query(Search).filter(Search.id == search_id).first()
+        except Exception:
+            pass
 
     if not search:
         # Fallback to MongoDB SearchDoc
         try:
             from app.models.models import SearchDoc
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                mongo_s = loop.run_until_complete(SearchDoc.find_one(SearchDoc.id == search_id))
-            except Exception:
-                mongo_s = asyncio.run(SearchDoc.find_one(SearchDoc.id == search_id))
+            mongo_s = await SearchDoc.find_one(SearchDoc.id == search_id)
 
             if mongo_s:
                 res_items = []
@@ -1205,19 +1201,36 @@ def get_search_details(
     )
 
 @router.delete("/{search_id}")
-def delete_search_record(
+async def delete_search_record(
     search_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete a search record belonging to the authenticated user."""
-    search = db.query(Search).filter(Search.id == search_id).first()
-    if not search:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Search record not found.")
+    deleted = False
+    try:
+        from app.models.models import SearchDoc
+        search_doc = await SearchDoc.find_one(SearchDoc.id == search_id)
+        if search_doc:
+            if str(search_doc.user_id) != str(current_user.id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized access.")
+            await search_doc.delete()
+            deleted = True
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
-    if str(search.user_id) != str(current_user.id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized access.")
+    if db:
+        search = db.query(Search).filter(Search.id == search_id).first()
+        if search:
+            if str(search.user_id) != str(current_user.id):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized access.")
+            db.delete(search)
+            db.commit()
+            deleted = True
 
-    db.delete(search)
-    db.commit()
-    return {"success": True, "message": "Search record successfully deleted."}
+    if deleted:
+        return {"success": True, "message": "Search record successfully deleted."}
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Search record not found.")

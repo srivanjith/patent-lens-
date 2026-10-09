@@ -133,7 +133,7 @@ async def register_user(request: UserRegisterRequest, response: Response, db: Se
     new_user_doc: Optional[UserDoc] = None
     try:
         new_user_doc = UserDoc(
-            _id=user_id,
+            id=user_id,
             name=request.name.strip(),
             email=email_clean,
             password_hash=pwd_hash,
@@ -270,7 +270,7 @@ async def google_auth(request: GoogleAuthRequest, response: Response, db: Sessio
         user_id = str(uuid.uuid4())
         try:
             user_doc = UserDoc(
-                _id=user_id,
+                id=user_id,
                 name=name,
                 email=email_clean,
                 password_hash=pwd,

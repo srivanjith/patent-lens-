@@ -1,4 +1,6 @@
-from typing import List
+from typing import List, Optional
+from datetime import datetime, timezone
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,7 @@ from app.models.models import User, Patent, SavedPatent, PatentDoc, SavedPatentD
 from app.schemas.schemas import PatentOut, SavedPatentOut, SavePatentRequest, CreateCustomPatentRequest
 from ml.embedding_service import embedding_service
 from ml.preprocessing import prepare_combined_text
+
 router = APIRouter(prefix="/patents", tags=["Patents"])
 
 @router.get("/saved", response_model=List[SavedPatentOut])
@@ -21,13 +24,44 @@ async def get_user_saved_patents(
         if saved_docs:
             out_list = []
             for s in saved_docs:
-                out_list.append(SavedPatentOut(
-                    id=s.id,
-                    user_id=s.user_id,
-                    patent_id=s.patent_id,
-                    notes=s.notes,
-                    created_at=s.created_at
-                ))
+                p_doc = await PatentDoc.find_one(PatentDoc.id == s.patent_id)
+                if not p_doc:
+                    p_doc = await PatentDoc.find_one(PatentDoc.patent_number == s.patent_id)
+                if p_doc:
+                    patent_out = PatentOut(
+                        id=p_doc.id or s.patent_id,
+                        patent_number=p_doc.patent_number or s.patent_id,
+                        title=p_doc.title or "Saved Patent",
+                        abstract=p_doc.abstract or "",
+                        description=p_doc.description or "",
+                        claims=p_doc.claims,
+                        inventors=p_doc.inventors or "Unknown",
+                        assignee=p_doc.assignee or "Independent",
+                        publication_date=p_doc.publication_date or "2024-01-01",
+                        domain=p_doc.domain or "General",
+                        source_url=p_doc.source_url,
+                        source_type=p_doc.source_type or "DATABASE",
+                        source_status=p_doc.source_status or "DATABASE",
+                        document_type=p_doc.document_type or "DATABASE RECORD",
+                        lens_id=p_doc.lens_id,
+                        filing_date=p_doc.filing_date,
+                        earliest_priority_date=p_doc.earliest_priority_date,
+                        simple_family_id=p_doc.simple_family_id,
+                        simple_family_size=p_doc.simple_family_size,
+                        extended_family_size=p_doc.extended_family_size,
+                        data_quality_status=p_doc.data_quality_status,
+                        cpc_codes=p_doc.cpc_codes,
+                        ipc_codes=p_doc.ipc_codes,
+                        jurisdiction=p_doc.jurisdiction,
+                        created_at=p_doc.created_at
+                    )
+                    out_list.append(SavedPatentOut(
+                        id=str(s.id),
+                        patent_id=s.patent_id,
+                        notes=s.notes,
+                        created_at=s.created_at,
+                        patent=patent_out
+                    ))
             return out_list
     except Exception:
         pass
@@ -51,16 +85,16 @@ async def get_patent_details(patent_id: str, db: Session = Depends(get_db)):
             doc = await PatentDoc.find_one(PatentDoc.patent_number == patent_id)
         if doc:
             return PatentOut(
-                id=doc.id,
-                patent_number=doc.patent_number,
-                title=doc.title,
-                abstract=doc.abstract,
-                description=doc.description,
+                id=doc.id or patent_id,
+                patent_number=doc.patent_number or patent_id,
+                title=doc.title or "Patent Record",
+                abstract=doc.abstract or "",
+                description=doc.description or "",
                 claims=doc.claims,
-                inventors=doc.inventors,
-                assignee=doc.assignee,
-                publication_date=doc.publication_date,
-                domain=doc.domain,
+                inventors=doc.inventors or "Unknown",
+                assignee=doc.assignee or "Independent",
+                publication_date=doc.publication_date or "2024-01-01",
+                domain=doc.domain or "General",
                 source_url=doc.source_url,
                 source_type=doc.source_type or "DATABASE",
                 source_status=doc.source_status or "DATABASE",
@@ -110,9 +144,41 @@ async def save_patent(
     if not patent_doc and not patent_sql:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Patent not found.")
 
-    target_patent_id = patent_doc.id if patent_doc else patent_sql.id
+    target_patent_id: str = (patent_doc.id if patent_doc and patent_doc.id else (patent_sql.id if patent_sql and patent_sql.id else patent_id))
 
     try:
+        p_doc = patent_doc or await PatentDoc.find_one(PatentDoc.id == target_patent_id)
+        if not p_doc:
+            p_doc = await PatentDoc.find_one(PatentDoc.patent_number == target_patent_id)
+
+        p_out = PatentOut(
+            id=p_doc.id if (p_doc and p_doc.id) else target_patent_id,
+            patent_number=p_doc.patent_number if (p_doc and p_doc.patent_number) else target_patent_id,
+            title=p_doc.title if p_doc else "Saved Patent",
+            abstract=p_doc.abstract if p_doc else "",
+            description=p_doc.description if p_doc else "",
+            claims=p_doc.claims if p_doc else None,
+            inventors=p_doc.inventors if (p_doc and p_doc.inventors) else "Unknown",
+            assignee=p_doc.assignee if (p_doc and p_doc.assignee) else "Independent",
+            publication_date=p_doc.publication_date if (p_doc and p_doc.publication_date) else "2024-01-01",
+            domain=p_doc.domain if p_doc else "General",
+            source_url=p_doc.source_url if p_doc else None,
+            source_type=p_doc.source_type if p_doc else "DATABASE",
+            source_status=p_doc.source_status if p_doc else "DATABASE",
+            document_type=p_doc.document_type if p_doc else "DATABASE RECORD",
+            lens_id=p_doc.lens_id if p_doc else None,
+            filing_date=p_doc.filing_date if p_doc else None,
+            earliest_priority_date=p_doc.earliest_priority_date if p_doc else None,
+            simple_family_id=p_doc.simple_family_id if p_doc else None,
+            simple_family_size=p_doc.simple_family_size if p_doc else 1,
+            extended_family_size=p_doc.extended_family_size if p_doc else 1,
+            data_quality_status=p_doc.data_quality_status if p_doc else "LIMITED",
+            cpc_codes=p_doc.cpc_codes if p_doc else None,
+            ipc_codes=p_doc.ipc_codes if p_doc else None,
+            jurisdiction=p_doc.jurisdiction if p_doc else None,
+            created_at=p_doc.created_at if p_doc else datetime.now(timezone.utc)
+        )
+
         existing_doc = await SavedPatentDoc.find_one(
             SavedPatentDoc.user_id == current_user.id,
             SavedPatentDoc.patent_id == target_patent_id
@@ -121,7 +187,13 @@ async def save_patent(
             if request.notes is not None:
                 existing_doc.notes = request.notes
                 await existing_doc.save()
-            return SavedPatentOut(id=existing_doc.id, user_id=existing_doc.user_id, patent_id=existing_doc.patent_id, notes=existing_doc.notes, created_at=existing_doc.created_at)
+            return SavedPatentOut(
+                id=str(existing_doc.id),
+                patent_id=existing_doc.patent_id,
+                notes=existing_doc.notes,
+                created_at=existing_doc.created_at,
+                patent=p_out
+            )
 
         new_saved_doc = SavedPatentDoc(
             user_id=current_user.id,
@@ -129,7 +201,13 @@ async def save_patent(
             notes=request.notes
         )
         await new_saved_doc.insert()
-        return SavedPatentOut(id=new_saved_doc.id, user_id=new_saved_doc.user_id, patent_id=new_saved_doc.patent_id, notes=new_saved_doc.notes, created_at=new_saved_doc.created_at)
+        return SavedPatentOut(
+            id=str(new_saved_doc.id),
+            patent_id=new_saved_doc.patent_id,
+            notes=new_saved_doc.notes,
+            created_at=new_saved_doc.created_at,
+            patent=p_out
+        )
     except Exception:
         pass
 
@@ -198,9 +276,6 @@ async def create_custom_patent(
     db: Session = Depends(get_db)
 ):
     """Save user-created custom invention into MongoDB Atlas with vector embeddings."""
-    import uuid
-    from datetime import datetime
-
     pat_number = f"US-USER-{uuid.uuid4().hex[:8].upper()}"
 
     combined_text = prepare_combined_text(
@@ -226,7 +301,7 @@ async def create_custom_patent(
             description=request.description,
             inventors=request.inventors or current_user.name,
             assignee=request.assignee or "User Invention",
-            publication_date=datetime.utcnow().strftime("%Y-%m-%d"),
+            publication_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             domain=request.domain,
             source_url=f"https://patentlens.ai/user/patent/{pat_number}",
             source_type="DATABASE",
@@ -238,26 +313,26 @@ async def create_custom_patent(
 
         saved_doc = SavedPatentDoc(
             user_id=current_user.id,
-            patent_id=new_doc.id,
+            patent_id=new_doc.id or pat_number,
             notes="User Submitted Invention"
         )
         await saved_doc.insert()
 
         return PatentOut(
-            id=new_doc.id,
-            patent_number=new_doc.patent_number,
+            id=new_doc.id or pat_number,
+            patent_number=new_doc.patent_number or pat_number,
             title=new_doc.title,
             abstract=new_doc.abstract,
             description=new_doc.description,
             claims=new_doc.claims,
-            inventors=new_doc.inventors,
-            assignee=new_doc.assignee,
-            publication_date=new_doc.publication_date,
+            inventors=new_doc.inventors or "Unknown",
+            assignee=new_doc.assignee or "Independent",
+            publication_date=new_doc.publication_date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             domain=new_doc.domain,
             source_url=new_doc.source_url,
-            source_type=new_doc.source_type,
-            source_status=new_doc.source_status,
-            document_type=new_doc.document_type,
+            source_type=new_doc.source_type or "DATABASE",
+            source_status=new_doc.source_status or "DATABASE",
+            document_type=new_doc.document_type or "DATABASE RECORD",
             created_at=new_doc.created_at
         )
     except Exception:
@@ -271,7 +346,7 @@ async def create_custom_patent(
             description=request.description,
             inventors=request.inventors or current_user.name,
             assignee=request.assignee or "User Invention",
-            publication_date=datetime.utcnow().strftime("%Y-%m-%d"),
+            publication_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             domain=request.domain,
             source_url=f"https://patentlens.ai/user/patent/{pat_number}",
             embedding=emb_data
@@ -287,4 +362,3 @@ async def create_custom_patent(
         return PatentOut.model_validate(new_patent)
 
     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create custom patent.")
-
