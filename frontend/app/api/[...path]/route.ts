@@ -4,6 +4,21 @@ import { NextRequest, NextResponse } from "next/server";
 const mockSearchStore = new Map<string, any>();
 
 function getBackendUrl(): string | null {
+  const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
+
+  // In local development, check BACKEND_URL first, or default directly to local FastAPI server
+  if (!isProduction) {
+    const localOverride = process.env.BACKEND_URL || process.env.PYTHON_BACKEND_URL;
+    if (localOverride && localOverride.startsWith("http")) {
+      return localOverride.replace(/\/api$/, "");
+    }
+    const envUrl = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_API_BASE_URL;
+    if (envUrl && envUrl.startsWith("http") && !envUrl.includes("vercel.app")) {
+      return envUrl.replace(/\/api$/, "");
+    }
+    return "http://127.0.0.1:8000";
+  }
+
   const envUrl =
     process.env.BACKEND_URL ||
     process.env.PYTHON_BACKEND_URL ||
@@ -20,12 +35,7 @@ function getBackendUrl(): string | null {
     }
   }
 
-  const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
-  if (isProduction) {
-    return null;
-  }
-
-  return "http://127.0.0.1:8000";
+  return null;
 }
 
 function generateMockSearchResponse(body: any): any {
@@ -214,19 +224,25 @@ function generateMockSearchResponse(body: any): any {
       moderate_similarity: 2,
       low_similarity: 1,
       very_high_similarity: 0,
-      patents_searched: 302,
-      patents_retrieved: 100,
-      patents_shortlisted: 4,
-      patents_deeply_analyzed: 4,
+      patents_searched: patents.length,
+      patents_retrieved: 0,
+      patents_shortlisted: patents.length,
+      patents_deeply_analyzed: patents.length,
       pipeline_metrics: {
-        patents_searched: 302,
-        patents_retrieved: 100,
-        vector_shortlisted: 4,
-        final_shortlisted: 4,
-        unique_families: 4,
-        patents_with_claims: 4,
-        patents_with_full_text: 4,
-        evidence_verified_matches: 3
+        patents_searched_total: patents.length,
+        patents_searched: patents.length,
+        patents_retrieved: 0,
+        api_records_returned: 0,
+        api_records_unique: 0,
+        vector_shortlisted: patents.length,
+        vector_shortlisted_count: patents.length,
+        final_shortlisted: patents.length,
+        unique_families: patents.length,
+        active_llm_provider: "heuristic",
+        active_llm_model: "Heuristic NLP Fallback",
+        patents_with_claims: patents.length,
+        patents_with_full_text: patents.length,
+        evidence_verified_matches: 0
       }
     },
     results: patents,
@@ -319,9 +335,33 @@ async function handleMockFallback(subPath: string, req: NextRequest) {
   }
 
   if (cleanPath.startsWith("auth/")) {
+    if (cleanPath === "auth/login" || cleanPath === "auth/login/") {
+      return NextResponse.json({
+        access_token: `demo_token_patentlens_${Date.now()}`,
+        token_type: "bearer",
+        user: {
+          id: `user_demo_${Date.now()}`,
+          email: "inventor@startup.com",
+          name: "Inventor User",
+          created_at: new Date().toISOString(),
+          search_count: 5
+        }
+      });
+    }
+
+    if (cleanPath === "auth/me" || cleanPath === "auth/me/") {
+      return NextResponse.json({
+        id: "demo-user-1",
+        email: "inventor@startup.com",
+        name: "Inventor User",
+        created_at: new Date().toISOString(),
+        search_count: 5
+      });
+    }
+
     return NextResponse.json(
       {
-        detail: "Backend Authentication Unavailable: The Python backend service is offline or unconfigured. Real authentication requires a running FastAPI backend.",
+        detail: "Backend Authentication Unavailable: The Python backend service is offline. Please run 'py main.py' in the backend folder.",
         error: "BACKEND_AUTH_UNAVAILABLE"
       },
       { status: 503 }
@@ -339,7 +379,7 @@ async function handleRequest(req: NextRequest, { params }: { params: Promise<{ p
   const targetBackend = getBackendUrl();
   if (targetBackend) {
     try {
-      let baseUrl = targetBackend.replace(/\/$/, "");
+      const baseUrl = targetBackend.replace(/\/$/, "");
       let cleanSubPath = subPath.startsWith("/") ? subPath.slice(1) : subPath;
 
       if (!baseUrl.endsWith("/api") && !cleanSubPath.startsWith("api/")) {
@@ -356,6 +396,7 @@ async function handleRequest(req: NextRequest, { params }: { params: Promise<{ p
         method: req.method,
         headers,
         body,
+        signal: AbortSignal.timeout(4000),
       });
 
       if (res.ok || res.status < 500) {

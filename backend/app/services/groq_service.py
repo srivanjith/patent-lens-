@@ -9,7 +9,7 @@ class GroqService:
 
     def __init__(self):
         self.api_key = settings.GROQ_API_KEY
-        self.model_name = settings.GROQ_MODEL or "llama-3.3-70b-versatile"
+        self.model_name = settings.GROQ_MODEL or "openai/gpt-oss-120b"
 
         self.client = None
         self._initialize_client()

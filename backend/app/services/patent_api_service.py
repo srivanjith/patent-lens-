@@ -63,11 +63,17 @@ class PatentAPIService:
         lens_total_searched = 0
         lens_retrieved_count = 0
         lens_api_status = "LENS_UNCONFIGURED"
+        lens_provider_status = "not_configured"
+        api_requests_attempted = 0
+        api_requests_succeeded = 0
+        api_requests_failed = 0
+        api_records_returned = 0
 
         if lens_api_service.is_configured:
             if is_testing and not is_mocked:
                 logger.info("[PATENT API] TESTING mode active. Skipping live Lens API requests.")
                 lens_api_status = "LENS_TESTING_MODE"
+                lens_provider_status = "skipped"
             else:
                 logger.info("[PATENT API] Fetching primary patent candidates from The Lens Patent API...")
                 lens_resp = lens_api_service.search_patents(
@@ -77,23 +83,37 @@ class PatentAPIService:
                 )
                 lens_patents = lens_resp.get("results", [])
                 lens_api_status = lens_resp.get("status", "LENS_OK")
+                lens_provider_status = lens_resp.get("provider_status", "success" if lens_patents else "success_empty")
                 lens_retrieved_count = lens_resp.get("retrieved_count", len(lens_patents))
                 lens_total_searched = lens_resp.get("total_searched", 0)
+                api_requests_attempted += lens_resp.get("requests_attempted", 0)
+                api_requests_succeeded += lens_resp.get("requests_succeeded", 0)
+                api_requests_failed += lens_resp.get("requests_failed", 0)
+                api_records_returned += lens_resp.get("records_returned", len(lens_patents))
 
                 # Independent CPC/IPC Classification Retrieval Path
                 if cpc_candidates:
                     cpc_patents = lens_api_service.search_by_cpc_classification(cpc_codes=cpc_candidates, limit=20)
                     lens_patents.extend(cpc_patents)
+                    api_records_returned += len(cpc_patents)
 
                 # Apply Patent Family Deduplication
                 dedup_lens_patents = lens_api_service.group_by_patent_family(lens_patents)
                 raw_candidates.extend(dedup_lens_patents)
                 logger.info(f"[PATENT API] Retained {len(dedup_lens_patents)} distinct patent families from The Lens (Open World Matched: {lens_total_searched}).")
+        else:
+            lens_provider_status = "not_configured"
 
         # 2. SUPPLEMENTARY SEARCH: PatentsView API if Lens returned < 10 records
         if not is_testing and len(raw_candidates) < 10:
             logger.info("[PATENT API] Querying supplementary patent records from PatentsView API...")
+            api_requests_attempted += 1
             supp_candidates = self._fetch_from_patentsview(title, keywords, domain, limit=target_limit - len(raw_candidates))
+            if supp_candidates:
+                api_requests_succeeded += 1
+                api_records_returned += len(supp_candidates)
+            else:
+                api_requests_succeeded += 1
             for sc in supp_candidates:
                 sc["source_status"] = "FALLBACK"
             raw_candidates.extend(supp_candidates)
@@ -101,11 +121,18 @@ class PatentAPIService:
         # 3. SEPARATE NON-PATENT LITERATURE: arXiv API
         if not is_testing:
             logger.info("[PATENT API] Fetching non-patent literature from arXiv Open Feed...")
+            api_requests_attempted += 1
             arxiv_records = self._fetch_from_arxiv(title, keywords, domain, limit=15)
+            if arxiv_records:
+                api_requests_succeeded += 1
+                api_records_returned += len(arxiv_records)
+            else:
+                api_requests_succeeded += 1
             for ar in arxiv_records:
                 ar["source_status"] = "LIVE_API"
             raw_candidates.extend(arxiv_records)
 
+        api_records_unique = len(raw_candidates)
         logger.info(f"[PATENT API] Total combined candidate records retrieved: {len(raw_candidates)}")
 
         # 4. Deduplicate, Generate Batch SBERT Embeddings, and Cache in DB
@@ -207,6 +234,12 @@ class PatentAPIService:
             "patents_searched": final_patents_searched,
             "lens_total_searched": lens_total_searched,
             "lens_api_status": lens_api_status,
+            "lens_provider_status": lens_provider_status,
+            "api_requests_attempted": api_requests_attempted,
+            "api_requests_succeeded": api_requests_succeeded,
+            "api_requests_failed": api_requests_failed,
+            "api_records_returned": api_records_returned,
+            "api_records_unique": api_records_unique,
             "live_patent_numbers": live_patent_numbers
         }
 

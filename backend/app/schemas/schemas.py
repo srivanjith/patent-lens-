@@ -194,7 +194,49 @@ class PatentFamilyMember(BaseModel):
     source_url: str = ""
 
 
+class ProviderStatus(BaseModel):
+    lens: str = "not_configured"
+    gemini: str = "not_configured"
+    groq: str = "not_configured"
+    overall_status: str = "completed"
+
+
 class PipelineMetrics(BaseModel):
+    # Granular search & candidate metrics
+    patents_searched_total: int = 0
+    database_candidates_examined: int = 0
+
+    # API observability
+    api_requests_attempted: int = 0
+    api_requests_succeeded: int = 0
+    api_requests_failed: int = 0
+    api_records_returned: int = 0
+    api_records_unique: int = 0
+
+    # Vector & embedding metrics
+    embedding_candidates: int = 0
+    vector_candidates_evaluated: int = 0
+    vector_shortlisted_count: int = 0
+    technical_candidates_retained: int = 0
+
+    # LLM pair analysis metrics
+    gemini_requests_attempted: int = 0
+    gemini_requests_succeeded: int = 0
+    gemini_requests_failed: int = 0
+    gemini_candidates_submitted: int = 0
+    gemini_candidates_analyzed: int = 0
+
+    groq_requests_attempted: int = 0
+    groq_requests_succeeded: int = 0
+    groq_requests_failed: int = 0
+    groq_candidates_submitted: int = 0
+    groq_candidates_analyzed: int = 0
+
+    active_llm_provider: str = "heuristic"
+    active_llm_model: str = "none"
+    provider_status: Optional[ProviderStatus] = None
+
+    # Legacy & backward-compatibility aliases
     patents_searched: int = 0
     patents_retrieved: int = 0
     lens_records_retrieved: int = 0
@@ -321,6 +363,7 @@ class SearchSummary(BaseModel):
     highest_semantic_similarity: Optional[float] = 0.0
     unique_families_count: Optional[int] = 0
     pipeline_metrics: Optional[PipelineMetrics] = None
+    provider_status: Optional[ProviderStatus] = None
 
 
 class PriorArtSearchResponse(BaseModel):
@@ -338,6 +381,7 @@ class PriorArtSearchResponse(BaseModel):
     is_demo_dataset: bool = True
     data_source: Optional[str] = "Live arXiv Feed"
     ai_model_used: Optional[str] = "Gemini 2.5 Flash"
+    provider_status: Optional[ProviderStatus] = None
     disclaimer: str = (
         "PatentLens AI provides AI-assisted preliminary technical prior-art relevance analysis. "
         "Results are intended for research and screening purposes and do not constitute a legal opinion "

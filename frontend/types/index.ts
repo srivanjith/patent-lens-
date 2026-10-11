@@ -92,7 +92,40 @@ export interface PatentFamilyMember {
   source_url: string;
 }
 
+export interface ProviderStatus {
+  lens?: 'success' | 'success_empty' | 'rate_limited' | 'authentication_error' | 'timeout' | 'provider_error' | 'not_configured' | 'skipped' | string;
+  gemini?: 'success' | 'success_empty' | 'rate_limited' | 'authentication_error' | 'timeout' | 'provider_error' | 'not_configured' | 'skipped' | string;
+  groq?: 'success' | 'success_empty' | 'rate_limited' | 'authentication_error' | 'timeout' | 'provider_error' | 'not_configured' | 'skipped' | string;
+  overall_status?: 'completed' | 'completed_with_warnings' | 'partial' | 'failed' | string;
+}
+
 export interface PipelineMetrics {
+  patents_searched_total?: number;
+  database_candidates_examined?: number;
+  api_requests_attempted?: number;
+  api_requests_succeeded?: number;
+  api_requests_failed?: number;
+  api_records_returned?: number;
+  api_records_unique?: number;
+  embedding_candidates?: number;
+  vector_candidates_evaluated?: number;
+  vector_shortlisted_count?: number;
+  technical_candidates_retained?: number;
+  gemini_requests_attempted?: number;
+  gemini_requests_succeeded?: number;
+  gemini_requests_failed?: number;
+  gemini_candidates_submitted?: number;
+  gemini_candidates_analyzed?: number;
+  groq_requests_attempted?: number;
+  groq_requests_succeeded?: number;
+  groq_requests_failed?: number;
+  groq_candidates_submitted?: number;
+  groq_candidates_analyzed?: number;
+  active_llm_provider?: string;
+  active_llm_model?: string;
+  provider_status?: ProviderStatus;
+
+  // Legacy fields
   patents_searched: number;
   patents_retrieved: number;
   vector_shortlisted: number;
@@ -183,6 +216,7 @@ export interface SearchSummary {
   highest_semantic_similarity?: number;
   unique_families_count?: number;
   pipeline_metrics?: PipelineMetrics;
+  provider_status?: ProviderStatus;
 }
 
 export interface PriorArtSearchResponse {
@@ -199,6 +233,7 @@ export interface PriorArtSearchResponse {
   is_demo_dataset: boolean;
   data_source?: string;
   ai_model_used?: string;
+  provider_status?: ProviderStatus;
   disclaimer: string;
 }
 

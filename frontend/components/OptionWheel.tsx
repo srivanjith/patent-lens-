@@ -83,23 +83,25 @@ const OptionWheel: React.FC<OptionWheelProps> = ({
 
   const remPx = typeof window !== 'undefined' ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16 : 16;
 
-  onChangeRef.current = onChange;
-  cfgRef.current = {
-    count: items.length,
-    items,
-    rowH: Math.max(fontSize * spacing * remPx, 1),
-    curve,
-    tilt,
-    blur,
-    fade,
-    minOpacity,
-    side,
-    loop,
-    smoothing,
-    draggable,
-    soundUrl,
-    soundVolume
-  };
+  useEffect(() => {
+    onChangeRef.current = onChange;
+    cfgRef.current = {
+      count: items.length,
+      items,
+      rowH: Math.max(fontSize * spacing * remPx, 1),
+      curve,
+      tilt,
+      blur,
+      fade,
+      minOpacity,
+      side,
+      loop,
+      smoothing,
+      draggable,
+      soundUrl,
+      soundVolume
+    };
+  }, [onChange, items, fontSize, spacing, remPx, curve, tilt, blur, fade, minOpacity, side, loop, smoothing, draggable, soundUrl, soundVolume]);
 
   const runFrame = useCallback((now: number) => {
     const dt = Math.min((now - lastRef.current) / 1000, 0.05);

@@ -166,9 +166,14 @@ def perform_prior_art_search(
             detail="Patent database is empty. Please run seed script first."
         )
 
-    # Ultra-fast NumPy vector cosine pre-filtering
+    # Phase 4 Vector Shortlisting & Candidate Evaluation
+    database_candidates_examined = len(all_patents)
+    embedding_candidates = 0
+    vector_candidates_evaluated = 0
+    vector_shortlisted_count = len(all_patents)
     candidate_patents = all_patents
-    if len(all_patents) > 100 and user_embedding:
+
+    if user_embedding:
         try:
             valid_patents = []
             emb_vectors = []
@@ -186,18 +191,38 @@ def perform_prior_art_search(
                     valid_patents.append(p)
                     emb_vectors.append(p_emb)
 
+            embedding_candidates = len(valid_patents)
+            vector_candidates_evaluated = len(valid_patents)
+
             if emb_vectors and u_norm > 0:
                 mat = np.array(emb_vectors, dtype=np.float32)
                 norms = np.linalg.norm(mat, axis=1)
                 norms[norms == 0] = 1e-9
                 sims = np.dot(mat, u_arr) / (norms * u_norm)
-                
+
+                # Count candidates passing vector cosine threshold (>= 0.25)
+                vec_passing = [p for p, s in zip(valid_patents, sims) if s >= 0.25]
+                if not vec_passing and valid_patents:
+                    vec_passing = [p for p, s in sorted(zip(valid_patents, sims), key=lambda x: x[1], reverse=True)[:min(100, len(valid_patents))]]
+                vector_shortlisted_count = len(vec_passing)
+
                 # Pair patents with similarities and pick top 100
                 sorted_patents = [p for p, s in sorted(zip(valid_patents, sims), key=lambda x: x[1], reverse=True)]
                 candidate_patents = sorted_patents[:100]
+            else:
+                vector_shortlisted_count = len(valid_patents) if valid_patents else len(all_patents)
+                candidate_patents = all_patents[:100]
         except Exception as e_pref:
             logger.warning(f"Vector pre-filtering fallback: {e_pref}")
+            embedding_candidates = len(all_patents)
+            vector_candidates_evaluated = len(all_patents)
+            vector_shortlisted_count = len(all_patents)
             candidate_patents = all_patents[:100]
+    else:
+        embedding_candidates = 0
+        vector_candidates_evaluated = 0
+        vector_shortlisted_count = len(all_patents)
+        candidate_patents = all_patents[:100]
 
     try:
         from ml.similarity_engine import is_technical_mismatch
@@ -355,11 +380,9 @@ def perform_prior_art_search(
 
     total_matches_count = len(top_10)
 
-    pat_searched: int = int(api_stats.get("patents_searched") or len(candidate_patents))
-    pat_retrieved: int = int(api_stats.get("patents_retrieved") or 0)
-    pat_shortlisted = len(top_10)
-    pat_deeply_analyzed = len(top_10)
-
+    pat_retrieved: int = int(api_stats.get("api_records_returned") or api_stats.get("patents_retrieved") or 0)
+    pat_searched: int = int(api_stats.get("patents_searched") or (database_candidates_examined + pat_retrieved))
+    pat_shortlisted: int = vector_shortlisted_count
     lens_status: str = str(api_stats.get("lens_api_status") or "LENS_OK")
 
     # Structured Stage-by-Stage Retrieval Quality Logging & Single Search Trace
@@ -369,7 +392,8 @@ def perform_prior_art_search(
     logger.info(f"[END-TO-END SEARCH TRACE] Generated Queries: {gemini_queries}")
     logger.info(f"[END-TO-END SEARCH TRACE] Lens API Endpoint: https://api.lens.org/patent/search | Method: POST")
     logger.info(f"[END-TO-END SEARCH TRACE] Lens API Status: {lens_status} | Live Records Returned: {pat_retrieved}")
-    logger.info(f"[END-TO-END SEARCH TRACE] DB Candidates Evaluated: {len(candidate_patents)} | Deduplicated Families: {len(family_grouped)}")
+    logger.info(f"[END-TO-END SEARCH TRACE] DB Candidates Evaluated: {database_candidates_examined} | Deduplicated Families: {len(family_grouped)}")
+    logger.info(f"[END-TO-END SEARCH TRACE] Vector Shortlisted Candidates: {vector_shortlisted_count}")
     logger.info(f"[END-TO-END SEARCH TRACE] Stage 4 Rejected Irrelevant Candidates: {rejected_count}")
     logger.info(f"[END-TO-END SEARCH TRACE] Final Shortlisted Technically Relevant Candidates: {len(top_10)}")
     logger.info(f"[END-TO-END SEARCH TRACE] Highest Similarity Score: {highest_similarity}% | Risk: {risk_info['risk_level']}")
@@ -391,25 +415,162 @@ def perform_prior_art_search(
         if any(e.get("verified") for e in item["scores"].get("evidence_items", []))
     )
 
-    try:
-        from app.schemas.schemas import ScoreBreakdown, PipelineMetrics, PatentFamilyMember
-    except ImportError:
-        from app.schemas.schemas import ScoreBreakdown, PipelineMetrics, PatentFamilyMember
+    llm_service = get_llm_service()
+    configured_provider = getattr(settings, "LLM_PROVIDER", "gemini").lower()
 
-    pat_searched_val = pat_searched
-    pat_retrieved_val = pat_retrieved
+    gemini_requests_attempted = 0
+    gemini_requests_succeeded = 0
+    gemini_requests_failed = 0
+    gemini_candidates_submitted = len(top_10) if configured_provider == "gemini" else 0
+    gemini_candidates_analyzed = 0
+
+    groq_requests_attempted = 0
+    groq_requests_succeeded = 0
+    groq_requests_failed = 0
+    groq_candidates_submitted = len(top_10) if configured_provider == "groq" else 0
+    groq_candidates_analyzed = 0
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _execute_pair_analysis(indexed_tuple):
+        i_idx, item_obj = indexed_tuple
+        p_obj = item_obj["patent"]
+        s_obj = item_obj["scores"]
+        prov_used = "heuristic"
+        is_success = False
+        try:
+            res_analysis = llm_service.analyze_patent_pair(
+                target_title=request.title,
+                target_problem=request.problem_statement,
+                target_description=request.description,
+                patent_number=p_obj.patent_number,
+                patent_title=p_obj.title,
+                patent_abstract=p_obj.abstract,
+                patent_description=p_obj.description,
+                similarity_score=s_obj["final_score"]
+            )
+            prov_used = res_analysis.get("provider", configured_provider)
+            is_success = bool(res_analysis.get("ai_powered", False))
+        except Exception as e_pair:
+            logger.warning(f"Pair analysis thread fallback for {p_obj.patent_number}: {e_pair}")
+            res_analysis = llm_service._normalize_parsed_response(
+                llm_service._generate_heuristic_pair_analysis(
+                    target_title=request.title,
+                    target_description=request.description,
+                    patent_number=p_obj.patent_number,
+                    patent_title=p_obj.title,
+                    patent_abstract=p_obj.abstract,
+                    similarity_score=s_obj["final_score"],
+                    patent_description=p_obj.description
+                )
+            )
+            prov_used = "heuristic"
+            is_success = False
+        return i_idx, res_analysis, prov_used, is_success
+
+    pair_analysis_map = {}
+    if top_10:
+        pair_timeout = 1.0 if (not llm_service.is_configured or lens_status == "LENS_RATE_LIMITED") else 4.0
+        with ThreadPoolExecutor(max_workers=min(10, len(top_10))) as pool:
+            futures = [pool.submit(_execute_pair_analysis, item_tuple) for item_tuple in enumerate(top_10, start=1)]
+            for fut in futures:
+                try:
+                    i_idx, res_analysis, prov_used, is_success = fut.result(timeout=pair_timeout)
+                    pair_analysis_map[i_idx] = res_analysis
+                    if configured_provider == "groq":
+                        groq_requests_attempted += 1
+                        if is_success and prov_used == "groq":
+                            groq_requests_succeeded += 1
+                            groq_candidates_analyzed += 1
+                        else:
+                            groq_requests_failed += 1
+                    elif configured_provider == "gemini":
+                        gemini_requests_attempted += 1
+                        if is_success and prov_used == "gemini":
+                            gemini_requests_succeeded += 1
+                            gemini_candidates_analyzed += 1
+                        else:
+                            gemini_requests_failed += 1
+                except Exception as e_fut:
+                    logger.warning(f"Thread pool task timeout/error: {e_fut}")
+                    if configured_provider == "groq":
+                        groq_requests_attempted += 1
+                        groq_requests_failed += 1
+                    elif configured_provider == "gemini":
+                        gemini_requests_attempted += 1
+                        gemini_requests_failed += 1
+
+    if groq_candidates_analyzed > 0:
+        active_llm_provider = "groq"
+        active_llm_model = getattr(llm_service, "model_name", "llama-3.3-70b-versatile")
+        groq_prov_status = "success"
+        gemini_prov_status = "not_configured"
+    elif gemini_candidates_analyzed > 0:
+        active_llm_provider = "gemini"
+        active_llm_model = getattr(llm_service, "model_name", "gemini-2.0-flash")
+        gemini_prov_status = "success"
+        groq_prov_status = "not_configured"
+    else:
+        active_llm_provider = "heuristic"
+        active_llm_model = "Heuristic-Rule-Engine"
+        groq_prov_status = "provider_error" if (configured_provider == "groq" and llm_service.is_configured) else "not_configured"
+        gemini_prov_status = "provider_error" if (configured_provider == "gemini" and llm_service.is_configured) else "not_configured"
+
+    lens_prov_status: str = str(api_stats.get("lens_provider_status") or ("success" if pat_retrieved > 0 else "not_configured"))
+
+    try:
+        from app.schemas.schemas import ScoreBreakdown, PipelineMetrics, PatentFamilyMember, ProviderStatus
+    except ImportError:
+        from app.schemas.schemas import ScoreBreakdown, PipelineMetrics, PatentFamilyMember, ProviderStatus
+
+    provider_status_obj = ProviderStatus(
+        lens=lens_prov_status,
+        gemini=gemini_prov_status,
+        groq=groq_prov_status,
+        overall_status="completed" if (top_10 and (groq_prov_status == "success" or gemini_prov_status == "success" or active_llm_provider == "heuristic")) else "partial"
+    )
+
+    pat_deeply_analyzed = (
+        groq_candidates_analyzed if active_llm_provider == "groq"
+        else gemini_candidates_analyzed if active_llm_provider == "gemini"
+        else len(top_10)
+    )
 
     pipeline_metrics = PipelineMetrics(
-        patents_searched=pat_searched_val,
-        patents_retrieved=pat_retrieved_val,
-        lens_records_retrieved=pat_retrieved_val,
-        database_fallback_candidates=len(candidate_patents) if pat_retrieved_val == 0 else 0,
+        patents_searched_total=pat_searched,
+        database_candidates_examined=database_candidates_examined,
+        api_requests_attempted=int(api_stats.get("api_requests_attempted", 0) or 0),
+        api_requests_succeeded=int(api_stats.get("api_requests_succeeded", 0) or 0),
+        api_requests_failed=int(api_stats.get("api_requests_failed", 0) or 0),
+        api_records_returned=int(api_stats.get("api_records_returned", pat_retrieved) or 0),
+        api_records_unique=int(api_stats.get("api_records_unique", pat_retrieved) or 0),
+        embedding_candidates=embedding_candidates,
+        vector_candidates_evaluated=vector_candidates_evaluated,
+        vector_shortlisted_count=vector_shortlisted_count,
+        technical_candidates_retained=len(scored_items),
+        gemini_requests_attempted=gemini_requests_attempted,
+        gemini_requests_succeeded=gemini_requests_succeeded,
+        gemini_requests_failed=gemini_requests_failed,
+        gemini_candidates_submitted=gemini_candidates_submitted,
+        gemini_candidates_analyzed=gemini_candidates_analyzed,
+        groq_requests_attempted=groq_requests_attempted,
+        groq_requests_succeeded=groq_requests_succeeded,
+        groq_requests_failed=groq_requests_failed,
+        groq_candidates_submitted=groq_candidates_submitted,
+        groq_candidates_analyzed=groq_candidates_analyzed,
+        active_llm_provider=active_llm_provider,
+        active_llm_model=active_llm_model,
+        provider_status=provider_status_obj,
+        patents_searched=pat_searched,
+        patents_retrieved=api_stats.get("api_records_returned", pat_retrieved),
+        lens_records_retrieved=pat_retrieved,
+        database_fallback_candidates=len(candidate_patents) if pat_retrieved == 0 else 0,
         final_shortlisted=len(top_10),
-        total_candidates_evaluated=len(candidate_patents) + pat_retrieved_val,
+        total_candidates_evaluated=len(candidate_patents) + pat_retrieved,
         raw_candidates=len(candidate_patents),
         candidates_with_family_ids=candidates_with_family_ids_cnt,
         post_dedup_candidates=len(deduped_scored_items),
-        vector_shortlisted=pat_shortlisted,
+        vector_shortlisted=vector_shortlisted_count,
         unique_families=len(family_grouped),
         semantic_candidates=len(candidate_patents),
         technical_candidates=len(top_10),
@@ -448,54 +609,7 @@ def perform_prior_art_search(
     except Exception as e_sql_s:
         logger.warning(f"SQL search record save note: {e_sql_s}")
 
-
-    llm_service = get_llm_service()
     result_items_response = []
-
-    # Parallelize patent pair feature analysis across top candidates
-    from concurrent.futures import ThreadPoolExecutor
-
-    def _execute_pair_analysis(indexed_tuple):
-        i_idx, item_obj = indexed_tuple
-        p_obj = item_obj["patent"]
-        s_obj = item_obj["scores"]
-        try:
-            res_analysis = llm_service.analyze_patent_pair(
-                target_title=request.title,
-                target_problem=request.problem_statement,
-                target_description=request.description,
-                patent_number=p_obj.patent_number,
-                patent_title=p_obj.title,
-                patent_abstract=p_obj.abstract,
-                patent_description=p_obj.description,
-                similarity_score=s_obj["final_score"]
-            )
-        except Exception as e_pair:
-            logger.warning(f"Pair analysis thread fallback for {p_obj.patent_number}: {e_pair}")
-            res_analysis = llm_service._normalize_parsed_response(
-                llm_service._generate_heuristic_pair_analysis(
-                    target_title=request.title,
-                    target_description=request.description,
-                    patent_number=p_obj.patent_number,
-                    patent_title=p_obj.title,
-                    patent_abstract=p_obj.abstract,
-                    similarity_score=s_obj["final_score"],
-                    patent_description=p_obj.description
-                )
-            )
-        return i_idx, res_analysis
-
-    pair_analysis_map = {}
-    if top_10:
-        pair_timeout = 1.0 if (not llm_service.is_configured or lens_status == "LENS_RATE_LIMITED") else 4.0
-        with ThreadPoolExecutor(max_workers=min(10, len(top_10))) as pool:
-            futures = [pool.submit(_execute_pair_analysis, item_tuple) for item_tuple in enumerate(top_10, start=1)]
-            for fut in futures:
-                try:
-                    i_idx, res_analysis = fut.result(timeout=pair_timeout)
-                    pair_analysis_map[i_idx] = res_analysis
-                except Exception as e_fut:
-                    logger.warning(f"Thread pool task timeout/error: {e_fut}")
 
     raw_live_nums = api_stats.get("live_patent_numbers") if isinstance(api_stats, dict) else None
     live_retrieved_set = set(raw_live_nums) if isinstance(raw_live_nums, (list, tuple, set)) else set()
@@ -841,7 +955,8 @@ def perform_prior_art_search(
         patents_deeply_analyzed=pat_deeply_analyzed,
         highest_semantic_similarity=highest_semantic_similarity,
         unique_families_count=len(family_grouped),
-        pipeline_metrics=pipeline_metrics
+        pipeline_metrics=pipeline_metrics,
+        provider_status=provider_status_obj
     )
 
     try:
@@ -884,7 +999,7 @@ def perform_prior_art_search(
         active_data_source = "Database Repository (Lens API 0 Live Records)"
     else:
         active_data_source = "Database Repository"
-    active_ai_model = getattr(llm_service, "model_name", "Gemini 3.6 Flash")
+    active_ai_model = active_llm_model
 
     return PriorArtSearchResponse(
         search_id=search_record.id,
@@ -900,7 +1015,8 @@ def perform_prior_art_search(
         ai_analysis=ai_analysis,
         is_demo_dataset=True,
         data_source=active_data_source,
-        ai_model_used=active_ai_model
+        ai_model_used=active_ai_model,
+        provider_status=provider_status_obj
     )
 
 @router.get("/history", response_model=List[SearchHistoryItem])
@@ -1004,13 +1120,16 @@ async def get_search_details(
                     moderate_similarity=mongo_s.moderate_similarity,
                     low_similarity=mongo_s.low_similarity,
                     very_high_similarity=mongo_s.very_high_similarity,
-                    patents_searched=mongo_s.patents_searched,
-                    patents_retrieved=mongo_s.patents_retrieved,
-                    patents_shortlisted=mongo_s.patents_shortlisted,
-                    patents_deeply_analyzed=mongo_s.patents_deeply_analyzed,
+                    patents_searched=pipe_metrics_obj.patents_searched_total if (pipe_metrics_obj and pipe_metrics_obj.patents_searched_total) else (pipe_metrics_obj.patents_searched if pipe_metrics_obj else mongo_s.patents_searched),
+                    patents_retrieved=pipe_metrics_obj.api_records_returned if (pipe_metrics_obj and pipe_metrics_obj.api_records_returned is not None) else (pipe_metrics_obj.patents_retrieved if pipe_metrics_obj else mongo_s.patents_retrieved),
+                    patents_shortlisted=pipe_metrics_obj.vector_shortlisted_count if (pipe_metrics_obj and pipe_metrics_obj.vector_shortlisted_count) else (pipe_metrics_obj.vector_shortlisted if pipe_metrics_obj else mongo_s.patents_shortlisted),
+                    patents_deeply_analyzed=pipe_metrics_obj.final_shortlisted if (pipe_metrics_obj and pipe_metrics_obj.final_shortlisted) else mongo_s.patents_deeply_analyzed,
                     highest_semantic_similarity=mongo_s.highest_similarity,
-                    pipeline_metrics=pipe_metrics_obj
+                    pipeline_metrics=pipe_metrics_obj,
+                    provider_status=pipe_metrics_obj.provider_status if pipe_metrics_obj else None
                 )
+
+                active_ai = (pipe_metrics_obj.active_llm_model if (pipe_metrics_obj and pipe_metrics_obj.active_llm_model and pipe_metrics_obj.active_llm_model != "none") else "llama-3.3-70b-versatile")
 
                 return PriorArtSearchResponse(
                     search_id=str(mongo_s.id),
@@ -1025,7 +1144,8 @@ async def get_search_details(
                     results=res_items,
                     is_demo_dataset=True,
                     data_source="Database Repository (MongoDB)",
-                    ai_model_used="Gemini 3.5 Flash"
+                    ai_model_used=active_ai,
+                    provider_status=pipe_metrics_obj.provider_status if pipe_metrics_obj else None
                 )
         except Exception as e_mget:
             logger.warning(f"MongoDB search details fallback note: {e_mget}")
@@ -1173,16 +1293,17 @@ async def get_search_details(
         moderate_similarity=mod_val,
         low_similarity=low_val,
         very_high_similarity=vhigh_val,
-        patents_searched=int(search.patents_searched or tot_val),
-        patents_retrieved=int(search.patents_retrieved or 0),
-        patents_shortlisted=int(search.patents_shortlisted or tot_val),
-        patents_deeply_analyzed=int(search.patents_deeply_analyzed or tot_val),
+        patents_searched=pipe_metrics_obj.patents_searched_total if (pipe_metrics_obj and pipe_metrics_obj.patents_searched_total) else int(search.patents_searched or tot_val),
+        patents_retrieved=pipe_metrics_obj.api_records_returned if (pipe_metrics_obj and pipe_metrics_obj.api_records_returned is not None) else int(search.patents_retrieved or 0),
+        patents_shortlisted=pipe_metrics_obj.vector_shortlisted_count if (pipe_metrics_obj and pipe_metrics_obj.vector_shortlisted_count) else int(search.patents_shortlisted or tot_val),
+        patents_deeply_analyzed=pipe_metrics_obj.final_shortlisted if (pipe_metrics_obj and pipe_metrics_obj.final_shortlisted) else int(search.patents_deeply_analyzed or tot_val),
         highest_semantic_similarity=highest_semantic,
-        pipeline_metrics=pipe_metrics_obj
+        pipeline_metrics=pipe_metrics_obj,
+        provider_status=pipe_metrics_obj.provider_status if pipe_metrics_obj else None
     )
 
     active_data_source = "The Lens Patent API (Live API)" if (search.patents_retrieved or 0) > 0 else "Database Repository"
-    active_ai_model = getattr(llm_service, "model_name", "Gemini 2.5 Flash")
+    active_ai_model = (pipe_metrics_obj.active_llm_model if (pipe_metrics_obj and pipe_metrics_obj.active_llm_model and pipe_metrics_obj.active_llm_model != "none") else getattr(llm_service, "model_name", "llama-3.3-70b-versatile"))
 
     return PriorArtSearchResponse(
         search_id=str(search.id),
@@ -1197,7 +1318,8 @@ async def get_search_details(
         results=result_items,
         is_demo_dataset=True,
         data_source=active_data_source,
-        ai_model_used=active_ai_model
+        ai_model_used=active_ai_model,
+        provider_status=pipe_metrics_obj.provider_status if pipe_metrics_obj else None
     )
 
 @router.delete("/{search_id}")

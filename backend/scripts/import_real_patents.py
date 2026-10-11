@@ -34,20 +34,26 @@ def fetch_live_patent_data(query_keyword: str = "quantum computing", limit: int 
         
         records = []
         for index, entry in enumerate(root.findall('atom:entry', namespace)):
-            id_text = entry.find('atom:id', namespace).text if entry.find('atom:id', namespace) is not None else f"DOC-{index}"
+            id_elem = entry.find('atom:id', namespace)
+            id_text = id_elem.text if (id_elem is not None and id_elem.text) else f"DOC-{index}"
             doc_id = id_text.split('/')[-1].replace('.', '-')
             patent_number = f"US-PAT-{doc_id.upper()}"
 
-            title = entry.find('atom:title', namespace).text if entry.find('atom:title', namespace) is not None else "Untitled Invention"
-            title = title.replace('\n', ' ').strip()
+            title_elem = entry.find('atom:title', namespace)
+            title = (title_elem.text or "").replace('\n', ' ').strip() if (title_elem is not None and title_elem.text) else "Untitled Invention"
 
-            summary = entry.find('atom:summary', namespace).text if entry.find('atom:summary', namespace) is not None else ""
-            summary = summary.replace('\n', ' ').strip()
+            summary_elem = entry.find('atom:summary', namespace)
+            summary = (summary_elem.text or "").replace('\n', ' ').strip() if (summary_elem is not None and summary_elem.text) else ""
 
-            authors = [author.find('atom:name', namespace).text for author in entry.findall('atom:author', namespace) if author.find('atom:name', namespace) is not None]
+            authors = []
+            for author in entry.findall('atom:author', namespace):
+                name_elem = author.find('atom:name', namespace)
+                if name_elem is not None and name_elem.text:
+                    authors.append(name_elem.text.strip())
             authors_str = ", ".join(authors) if authors else "Independent Inventor"
 
-            published = entry.find('atom:published', namespace).text[:10] if entry.find('atom:published', namespace) is not None else "2024-01-01"
+            pub_elem = entry.find('atom:published', namespace)
+            published = (pub_elem.text or "")[:10] if (pub_elem is not None and pub_elem.text) else "2024-01-01"
 
             records.append({
                 "patent_number": patent_number,

@@ -196,32 +196,61 @@ export default function SearchResultsPage() {
           </div>
 
           {/* Patent API Execution Audit Metrics Bar */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-5 rounded-xl bg-[#0b0e26]/60 border border-indigo-500/20 shadow-inner">
-            <div className="text-center p-2 rounded-lg bg-indigo-950/30 border border-indigo-500/10">
-              <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-300">Patents Searched</div>
-              <div className="text-2xl font-mono font-extrabold text-indigo-200 mt-1">
-                {(data.summary?.pipeline_metrics?.patents_searched ?? data.summary?.patents_searched ?? 302).toLocaleString()}
+          {(() => {
+            const searchedCount = data.summary?.pipeline_metrics?.patents_searched_total ?? data.summary?.pipeline_metrics?.patents_searched ?? data.summary?.patents_searched ?? (safeResults.length ? safeResults.length : null);
+            const apiRetrievedCount = data.summary?.pipeline_metrics?.api_records_returned ?? data.summary?.pipeline_metrics?.patents_retrieved ?? data.summary?.patents_retrieved ?? 0;
+            const vectorCount = data.summary?.pipeline_metrics?.vector_shortlisted_count ?? data.summary?.pipeline_metrics?.vector_shortlisted ?? data.summary?.patents_shortlisted ?? (safeResults.length ? safeResults.length : null);
+            
+            const rawModel = data.summary?.pipeline_metrics?.active_llm_model || data.ai_model_used;
+            const llmLabel = (() => {
+              if (!rawModel || rawModel === "none") return "LLM Analyzed";
+              if (rawModel.toLowerCase().includes("gpt-oss")) return "GPT-OSS 120B Analyzed";
+              if (rawModel.toLowerCase().includes("llama")) return "Llama-3.3-70B Analyzed";
+              if (rawModel.toLowerCase().includes("gemini")) return "Gemini-2.0-Flash Analyzed";
+              if (rawModel.toLowerCase().includes("heuristic")) return "Heuristic NLP Analyzed";
+              return `${rawModel} Analyzed`;
+            })();
+
+            const pm = data.summary?.pipeline_metrics;
+            const llmCount = (() => {
+              if (pm?.active_llm_provider === "groq" && pm.groq_candidates_analyzed !== undefined) {
+                return pm.groq_candidates_analyzed;
+              }
+              if (pm?.active_llm_provider === "gemini" && pm.gemini_candidates_analyzed !== undefined) {
+                return pm.gemini_candidates_analyzed;
+              }
+              return pm?.final_shortlisted ?? data.summary?.patents_deeply_analyzed ?? (safeResults.length ? safeResults.length : null);
+            })();
+
+            return (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-5 rounded-xl bg-[#0b0e26]/60 border border-indigo-500/20 shadow-inner">
+                <div className="text-center p-2 rounded-lg bg-indigo-950/30 border border-indigo-500/10">
+                  <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-indigo-300">Patents Searched</div>
+                  <div className="text-2xl font-mono font-extrabold text-indigo-200 mt-1">
+                    {searchedCount !== null && searchedCount !== undefined ? searchedCount.toLocaleString() : "N/A"}
+                  </div>
+                </div>
+                <div className="text-center p-2 rounded-lg bg-sky-950/30 border border-sky-500/10">
+                  <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-sky-300">API Retrieved</div>
+                  <div className="text-2xl font-mono font-extrabold text-sky-200 mt-1">
+                    {apiRetrievedCount.toLocaleString()}
+                  </div>
+                </div>
+                <div className="text-center p-2 rounded-lg bg-purple-950/30 border border-purple-500/10">
+                  <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-purple-300">Vector Shortlisted</div>
+                  <div className="text-2xl font-mono font-extrabold text-purple-200 mt-1">
+                    {vectorCount !== null && vectorCount !== undefined ? vectorCount.toLocaleString() : "N/A"}
+                  </div>
+                </div>
+                <div className="text-center p-2 rounded-lg bg-emerald-950/30 border border-emerald-500/10">
+                  <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-300">{llmLabel}</div>
+                  <div className="text-2xl font-mono font-extrabold text-emerald-200 mt-1">
+                    {llmCount !== null && llmCount !== undefined ? llmCount.toLocaleString() : "N/A"}
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="text-center p-2 rounded-lg bg-sky-950/30 border border-sky-500/10">
-              <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-sky-300">API Retrieved</div>
-              <div className="text-2xl font-mono font-extrabold text-sky-200 mt-1">
-                {(data.summary?.pipeline_metrics?.patents_retrieved ?? data.summary?.patents_retrieved ?? 100).toLocaleString()}
-              </div>
-            </div>
-            <div className="text-center p-2 rounded-lg bg-purple-950/30 border border-purple-500/10">
-              <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-purple-300">Vector Shortlisted</div>
-              <div className="text-2xl font-mono font-extrabold text-purple-200 mt-1">
-                {(data.summary?.pipeline_metrics?.vector_shortlisted ?? data.summary?.patents_shortlisted ?? safeResults.length).toLocaleString()}
-              </div>
-            </div>
-            <div className="text-center p-2 rounded-lg bg-emerald-950/30 border border-emerald-500/10">
-              <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-300">Gemini-2.5-Flash Analyzed</div>
-              <div className="text-2xl font-mono font-extrabold text-emerald-200 mt-1">
-                {(data.summary?.pipeline_metrics?.final_shortlisted ?? data.summary?.patents_deeply_analyzed ?? safeResults.length).toLocaleString()}
-              </div>
-            </div>
-          </div>
+            );
+          })()}
 
           {/* Prior-Art Relevance Indicator Card */}
           {(() => {

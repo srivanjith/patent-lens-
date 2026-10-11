@@ -64,7 +64,14 @@ class LensAPIService:
             return {
                 "results": [],
                 "status": "LENS_UNCONFIGURED",
+                "provider_status": "not_configured",
                 "retrieved_count": 0,
+                "total_searched": 0,
+                "requests_attempted": 0,
+                "requests_succeeded": 0,
+                "requests_failed": 0,
+                "records_returned": 0,
+                "records_unique": 0,
                 "diagnostics": {"is_configured": False, "masked_token": "UNCONFIGURED", "http_status": 0}
             }
 
@@ -88,15 +95,23 @@ class LensAPIService:
             return {
                 "results": [],
                 "status": "LENS_QUERY_ERROR",
+                "provider_status": "provider_error",
                 "retrieved_count": 0,
+                "total_searched": 0,
+                "requests_attempted": 0,
+                "requests_succeeded": 0,
+                "requests_failed": 0,
+                "records_returned": 0,
+                "records_unique": 0,
                 "diagnostics": {"is_configured": True, "masked_token": self.masked_token(), "http_status": 400}
             }
 
         query_statuses = []
         http_statuses = []
         total_counts = []
+        raw_items_counts = []
 
-        def _fetch_single_lens_query(q_str: str) -> Tuple[List[Dict[str, Any]], str, int, int]:
+        def _fetch_single_lens_query(q_str: str) -> Tuple[List[Dict[str, Any]], str, int, int, int]:
             clean_q = self._sanitize_query_for_lens(q_str)
             p_payload = {
                 "query": clean_q,
@@ -138,33 +153,43 @@ class LensAPIService:
                             f"Total Matched: {total_matched} | Returned: {len(raw_items)} | Parsed: {len(parsed)}"
                         )
                         if parsed:
-                            return parsed, "LENS_OK", 200, total_matched
+                            return parsed, "LENS_OK", 200, total_matched, len(raw_items)
                         else:
-                            return [], "LENS_NO_RESULTS", 200, total_matched
+                            return [], "LENS_NO_RESULTS", 200, total_matched, len(raw_items)
                     elif res.status_code in [401, 403]:
                         logger.error(f"[LENS HTTP DIAGNOSTICS] HTTP {res.status_code} LENS_AUTH_ERROR ({elapsed_ms}ms): {res.text[:200]}")
-                        return [], "LENS_AUTH_ERROR", res.status_code, 0
+                        return [], "LENS_AUTH_ERROR", res.status_code, 0, 0
                     elif res.status_code == 429:
                         logger.error(f"[LENS HTTP DIAGNOSTICS] HTTP 429 LENS_RATE_LIMITED ({elapsed_ms}ms): {res.text[:200]}")
-                        return [], "LENS_RATE_LIMITED", 429, 0
+                        return [], "LENS_RATE_LIMITED", 429, 0, 0
                     elif res.status_code == 400:
                         logger.error(f"[LENS HTTP DIAGNOSTICS] HTTP 400 LENS_QUERY_ERROR for query '{q_str}' ({elapsed_ms}ms): {res.text[:200]}")
-                        return [], "LENS_QUERY_ERROR", 400, 0
+                        return [], "LENS_QUERY_ERROR", 400, 0, 0
                     else:
                         logger.error(f"[LENS HTTP DIAGNOSTICS] HTTP {res.status_code} LENS_API_UNAVAILABLE ({elapsed_ms}ms): {res.text[:200]}")
-                        return [], "LENS_API_UNAVAILABLE", res.status_code, 0
+                        return [], "LENS_API_UNAVAILABLE", res.status_code, 0, 0
             except Exception as e:
                 elapsed_ms = round((time.time() - start_time) * 1000.0, 1)
                 logger.warning(f"[LENS HTTP DIAGNOSTICS] Exception LENS_API_UNAVAILABLE for query '{q_str}' ({elapsed_ms}ms): {e}")
-                return [], "LENS_API_UNAVAILABLE", 503, 0
+                return [], "LENS_API_UNAVAILABLE", 503, 0, 0
+
+        requests_attempted = len(target_queries)
+        requests_succeeded = 0
+        requests_failed = 0
+        total_raw_items_returned = 0
 
         with ThreadPoolExecutor(max_workers=min(8, len(target_queries))) as pool:
             futures = [pool.submit(_fetch_single_lens_query, q) for q in target_queries]
             for fut in futures:
                 try:
-                    records, q_stat, h_code, q_total = fut.result(timeout=self.thread_timeout)
+                    records, q_stat, h_code, q_total, raw_cnt = fut.result(timeout=self.thread_timeout)
                     query_statuses.append(q_stat)
                     http_statuses.append(h_code)
+                    total_raw_items_returned += raw_cnt
+                    if h_code == 200:
+                        requests_succeeded += 1
+                    else:
+                        requests_failed += 1
                     if q_total > 0:
                         total_counts.append(q_total)
                     for r in records:
@@ -175,25 +200,33 @@ class LensAPIService:
                     logger.warning(f"[LENS API] Thread pool query timeout/error: {e_fut}")
                     query_statuses.append("LENS_API_UNAVAILABLE")
                     http_statuses.append(504)
+                    requests_failed += 1
 
         # Fail Loudly: Determine single atomic Lens API status
         primary_http_code = http_statuses[0] if http_statuses else 0
         if "LENS_AUTH_ERROR" in query_statuses and not all_results:
             overall_status = "LENS_AUTH_ERROR"
+            lens_prov_status = "authentication_error"
         elif "LENS_RATE_LIMITED" in query_statuses and not all_results:
             overall_status = "LENS_RATE_LIMITED"
+            lens_prov_status = "rate_limited"
         elif all_results:
             if any(s in ["LENS_RATE_LIMITED", "LENS_AUTH_ERROR", "LENS_API_UNAVAILABLE"] for s in query_statuses):
                 overall_status = "LENS_PARTIAL_RESULTS"
+                lens_prov_status = "success"
             else:
                 overall_status = "LENS_OK"
+                lens_prov_status = "success"
         else:
             if "LENS_QUERY_ERROR" in query_statuses:
                 overall_status = "LENS_QUERY_ERROR"
+                lens_prov_status = "provider_error"
             elif any(s == "LENS_API_UNAVAILABLE" for s in query_statuses):
                 overall_status = "LENS_API_UNAVAILABLE"
+                lens_prov_status = "timeout" if 504 in http_statuses else "provider_error"
             else:
                 overall_status = "LENS_NO_RESULTS"
+                lens_prov_status = "success_empty"
 
         max_total_searched = max(total_counts) if total_counts else len(all_results)
 
@@ -205,8 +238,14 @@ class LensAPIService:
         return {
             "results": all_results[:limit],
             "status": overall_status,
+            "provider_status": lens_prov_status,
             "retrieved_count": len(all_results),
-            "total_searched": max_total_searched
+            "total_searched": max_total_searched,
+            "requests_attempted": requests_attempted,
+            "requests_succeeded": requests_succeeded,
+            "requests_failed": requests_failed,
+            "records_returned": total_raw_items_returned,
+            "records_unique": len(all_results)
         }
 
     def _normalize_lens_record(self, raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
