@@ -229,8 +229,14 @@ export const api = {
       }
       return data;
     } catch (err: any) {
-      // If backend responded with an error (400, 422, 500, etc.), propagate it so issues are not masked
-      if (err?.message && !err.message.includes("Failed to connect")) {
+      // If backend responded with an application error (400, 422, 500, etc.), propagate it so issues are not masked,
+      // but if the backend is unreachable, connection failed, or blocked by infrastructure auth (e.g. Vercel deployment protection), fall back gracefully
+      const isConnectionOrInfraIssue =
+        !err?.message ||
+        err.message.includes("Failed to connect") ||
+        err.message.includes("Vercel Authentication") ||
+        err.message.includes("Protected deployment");
+      if (!isConnectionOrInfraIssue) {
         console.error("[Search Error] Backend returned error:", err.message);
         throw err;
       }

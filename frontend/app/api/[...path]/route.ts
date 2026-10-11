@@ -30,7 +30,8 @@ function getBackendUrl(): string | null {
     if (clean === "/api" || clean.endsWith("/api")) {
       clean = clean.replace(/\/api$/, "");
     }
-    if (clean && clean.startsWith("http")) {
+    // Never proxy to vercel.app domains (self-referential frontend loop or protected preview deployments)
+    if (clean && clean.startsWith("http") && !clean.includes("vercel.app")) {
       return clean;
     }
   }
@@ -425,9 +426,23 @@ async function handleRequest(req: NextRequest, { params }: { params: Promise<{ p
       const contentType = res.headers.get("content-type") || "";
       if (contentType.includes("application/json")) {
         const data = await res.json().catch(() => ({}));
+        // If upstream returned Vercel Deployment Protection 401 error, fall back to local handler
+        if (
+          res.status === 401 &&
+          (data?.message === "Protected by Vercel Authentication" ||
+            data?.error?.message === "Protected deployment" ||
+            data?.protection?.vercel_auth_enabled)
+        ) {
+          console.warn(`[API Proxy Warning] Target backend (${targetBackend}) returned Vercel Deployment Protection. Falling back to local handler.`);
+          return handleMockFallback(subPath, req);
+        }
         return NextResponse.json(data, { status: res.status });
       } else {
         const text = await res.text();
+        if (res.status === 401 && text.includes("Protected by Vercel Authentication")) {
+          console.warn(`[API Proxy Warning] Target backend (${targetBackend}) returned HTML Vercel Deployment Protection. Falling back to local handler.`);
+          return handleMockFallback(subPath, req);
+        }
         return new NextResponse(text, {
           status: res.status,
           headers: {
