@@ -507,7 +507,7 @@ def perform_prior_art_search(
         gemini_prov_status = "not_configured"
     elif gemini_candidates_analyzed > 0:
         active_llm_provider = "gemini"
-        active_llm_model = getattr(llm_service, "model_name", "gemini-2.0-flash")
+        active_llm_model = getattr(llm_service, "model_name", "gemini-2.5-flash")
         gemini_prov_status = "success"
         groq_prov_status = "not_configured"
     else:
@@ -607,6 +607,7 @@ def perform_prior_art_search(
         db.commit()
         db.refresh(search_record)
     except Exception as e_sql_s:
+        db.rollback()
         logger.warning(f"SQL search record save note: {e_sql_s}")
 
     result_items_response = []
@@ -806,13 +807,13 @@ def perform_prior_art_search(
             essential_features=gemini_essential,
             optional_features=gemini_optional,
             structured_quadruplets=gemini_quads,
-            distinctive_features=pair_analysis.get("distinctive_features", []),
-            matched_features=pair_analysis.get("matched_features", []),
+            distinctive_features=sc.get("distinctive_features") or pair_analysis.get("distinctive_features", []),
+            matched_features=sc.get("matched_features") or pair_analysis.get("matched_features", []),
             strong_matches=sc.get("strong_matches", []),
             partial_matches=sc.get("partial_matches", []),
             weak_matches=sc.get("weak_matches", []),
             missing_features=sc.get("missing_features", []),
-            unmatched_features=pair_analysis.get("unmatched_features", sc.get("missing_features", [])),
+            unmatched_features=sc.get("missing_features", []) or pair_analysis.get("unmatched_features", []),
             unverifiable_features=sc.get("unverifiable_features", []),
             evidence_items=sc.get("evidence_items", []),
             evidence_status_label=ev_status_lbl,
@@ -885,7 +886,7 @@ def perform_prior_art_search(
             db.add(sr)
             db.commit()
         except Exception:
-            pass
+            db.rollback()
 
     # Save search record and embedded results to MongoDB Atlas SearchDoc
     try:

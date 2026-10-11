@@ -280,21 +280,21 @@ Return ONLY valid JSON matching this exact structure:
             from ml.keyword_extractor import extract_structured_invention_features, extract_atomic_technical_features
         full_text = f"{title} {problem_statement} {description}"
         struct_res = extract_structured_invention_features(full_text)
-        atomic_feats = extract_atomic_technical_features(full_text, top_n=8)
+        atomic_feats = extract_atomic_technical_features(full_text, top_n=8, user_keywords=keywords)
         
         distinctive = [f for f in atomic_feats if len(f.split()) >= 2] or atomic_feats[:4]
 
         dist_0 = distinctive[0] if distinctive else title
-        dist_1 = distinctive[1] if len(distinctive) > 1 else (domain or "system")
+        dist_1 = distinctive[1] if len(distinctive) > 1 else (keywords[0] if keywords else (domain or "system"))
 
         search_queries = [
             f"\"{dist_0}\" AND \"{dist_1}\"",
             f"\"{dist_0}\"",
             f"\"{title}\"",
             f"\"{domain or 'technology'}\" AND \"{dist_0}\"",
-            f"\"operating principle\" AND \"{dist_0}\"",
-            f"claims:(\"{dist_0}\")",
             f"\"{dist_1}\"",
+            f"claims:(\"{dist_0}\")",
+            f"\"{dist_0}\" AND \"{keywords[1] if len(keywords) > 1 else 'control'}\"",
             f"\"{domain or 'technology'}\" AND \"prior art\""
         ]
 

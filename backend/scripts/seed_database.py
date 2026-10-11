@@ -15,7 +15,7 @@ from ml.preprocessing import prepare_combined_text
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("patentlens.seed")
 
-def seed_patents_if_needed(db: Session = None, force_reseed: bool = False):
+def seed_patents_if_needed(db: Session | None = None, force_reseed: bool = False):
     """Seed sample patent dataset and generate SBERT embeddings if database is missing patents."""
     close_session = False
     if db is None:
@@ -53,6 +53,11 @@ def seed_patents_if_needed(db: Session = None, force_reseed: bool = False):
 
         with open(json_path, "r", encoding="utf-8") as f:
             patents_data = json.load(f)
+
+        existing_patent_count = db.query(Patent).count()
+        if existing_patent_count >= 10 and not force_reseed:
+            logger.info(f"Database already populated with {existing_patent_count} sample patents. Skipping seeding.")
+            return
 
         existing_patent_map = {p.patent_number: p for p in db.query(Patent).all()}
         missing_count = sum(1 for p in patents_data if p["patent_number"] not in existing_patent_map)

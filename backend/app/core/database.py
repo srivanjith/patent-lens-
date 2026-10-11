@@ -108,54 +108,45 @@ def ensure_columns_exist(engine_instance):
     ]
     try:
         with engine_instance.connect() as conn:
-            for col_name, col_type in cols_searches:
-                try:
-                    if IS_POSTGRES:
-                        conn.execute(text(f"ALTER TABLE searches ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
-                    else:
-                        conn.execute(text(f"ALTER TABLE searches ADD COLUMN {col_name} {col_type};"))
-                    conn.commit()
-                except Exception:
-                    pass
-
-            for col_name, col_type in cols_search_results:
-                try:
-                    if IS_POSTGRES:
-                        conn.execute(text(f"ALTER TABLE search_results ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
-                    else:
-                        conn.execute(text(f"ALTER TABLE search_results ADD COLUMN {col_name} {col_type};"))
-                    conn.commit()
-                except Exception:
-                    pass
-
-            for col_name, col_type in cols_users:
-                try:
-                    if IS_POSTGRES:
-                        conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
-                    else:
-                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type};"))
-                    conn.commit()
-                except Exception:
-                    pass
-
-            for col_name, col_type in cols_patents:
-                try:
-                    if IS_POSTGRES:
-                        conn.execute(text(f"ALTER TABLE patents ADD COLUMN IF NOT EXISTS {col_name} {col_type};"))
-                    else:
-                        conn.execute(text(f"ALTER TABLE patents ADD COLUMN {col_name} {col_type};"))
-                    conn.commit()
-                except Exception:
-                    pass
+            if IS_POSTGRES:
+                # Batch all column additions into single ALTER TABLE statements per table to avoid dozens of network round-trips
+                for tbl_name, col_specs in [
+                    ("searches", cols_searches),
+                    ("search_results", cols_search_results),
+                    ("users", cols_users),
+                    ("patents", cols_patents),
+                ]:
+                    try:
+                        add_clauses = [f"ADD COLUMN IF NOT EXISTS {col} {ctype}" for col, ctype in col_specs]
+                        sql_stmt = f"ALTER TABLE {tbl_name} {', '.join(add_clauses)};"
+                        conn.execute(text(sql_stmt))
+                    except Exception as e_tbl:
+                        logger.debug(f"PostgreSQL batch column check for {tbl_name}: {e_tbl}")
+                conn.commit()
+            else:
+                for tbl_name, col_specs in [
+                    ("searches", cols_searches),
+                    ("search_results", cols_search_results),
+                    ("users", cols_users),
+                    ("patents", cols_patents),
+                ]:
+                    for col_name, col_type in col_specs:
+                        try:
+                            conn.execute(text(f"ALTER TABLE {tbl_name} ADD COLUMN {col_name} {col_type};"))
+                        except Exception:
+                            pass
+                conn.commit()
         logger.info("Successfully executed database column migration check.")
     except Exception as e:
         logger.warning(f"Database column migration note: {e}")
 
-# Run schema column checks upon engine initialization
-try:
-    ensure_columns_exist(engine)
-except Exception as e:
-    logger.warning(f"Initial schema migration note: {e}")
+# Run schema column checks upon engine initialization (skip during fast testing imports)
+is_test_env = (getattr(settings, "TESTING", False) or os.getenv("TESTING", "").lower() == "true")
+if not is_test_env:
+    try:
+        ensure_columns_exist(engine)
+    except Exception as e:
+        logger.warning(f"Initial schema migration note: {e}")
 
 def get_db():
     """Dependency for obtaining database sessions in FastAPI routes."""

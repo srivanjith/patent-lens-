@@ -27,9 +27,9 @@ RELATED_DOMAINS_MAP = {
     "Electrical Engineering": {"Electronics", "Energy", "IoT", "Robotics", "Software", "Artificial Intelligence"},
     "Electronics": {"Electrical Engineering", "IoT", "Robotics", "Software", "Energy", "Artificial Intelligence"},
     "Energy": {"Electrical Engineering", "Electronics", "Manufacturing", "IoT", "Mechanical Engineering"},
-    "Artificial Intelligence": {"Software", "Robotics", "Electronics", "IoT", "Electrical Engineering", "Healthcare", "Biotechnology", "Medical Imaging"},
-    "Software": {"Artificial Intelligence", "Electronics", "IoT", "Electrical Engineering", "Healthcare", "Biotechnology", "Medical Imaging"},
-    "Agriculture": {"IoT", "Biotechnology", "Robotics"},
+    "Artificial Intelligence": {"Software", "Robotics", "Electronics", "IoT", "Electrical Engineering", "Healthcare", "Biotechnology", "Medical Imaging", "Agriculture"},
+    "Software": {"Artificial Intelligence", "Electronics", "IoT", "Electrical Engineering", "Healthcare", "Biotechnology", "Medical Imaging", "Agriculture"},
+    "Agriculture": {"IoT", "Biotechnology", "Robotics", "Artificial Intelligence", "Software", "Environmental Monitoring"},
     "Healthcare": {"Biotechnology", "Electronics", "IoT", "Artificial Intelligence", "Software", "Medical Imaging"},
     "Medical Imaging": {"Healthcare", "Artificial Intelligence", "Software", "Electronics", "Biotechnology"},
     "IoT": {"Electronics", "Software", "Robotics", "Artificial Intelligence", "Electrical Engineering", "Healthcare"},
@@ -373,10 +373,16 @@ def compute_hybrid_score(
     semantic_sim = calculate_cosine_similarity(user_embedding, patent_embedding)
 
     # 1. Target Features & Distinctive Concepts Preparation
-    target_features = technical_features or extract_atomic_technical_features(target_text_for_concepts, top_n=9)
-    clean_target_features = [f for f in target_features if f.strip().lower() not in GENERIC_NOISE]
+    from ml.keyword_extractor import clean_technical_feature_phrase
+    raw_feats = technical_features or extract_atomic_technical_features(target_text_for_concepts, top_n=9, user_keywords=user_keywords)
+    clean_target_features = []
+    for f in raw_feats:
+        cf = clean_technical_feature_phrase(f)
+        if cf and cf.strip().lower() not in GENERIC_NOISE:
+            if not any(cf.lower() == existing.lower() for existing in clean_target_features):
+                clean_target_features.append(cf)
     if not clean_target_features:
-        clean_target_features = [patent_title.title() if patent_title else "Technical Feature"]
+        clean_target_features = [clean_technical_feature_phrase(patent_title) or "Technical Feature"]
 
     clean_essential = essential_features or clean_target_features[:4]
     distinctive_concepts = distinctive_features or [f for f in clean_target_features if len(f.split()) >= 2] or clean_target_features[:4]
@@ -620,20 +626,23 @@ def compute_hybrid_score(
 
         if m_level != "NOT_FOUND":
             quote_text = (best_sentence_quote or quote_snippet or "").strip()
-            has_real_quote = bool(quote_text and len(quote_text) > 5)
-            is_ver = bool(s_match >= 0.70 and has_real_quote)
+            is_substantive = bool(full_patent_text and len(full_patent_text) > 15)
+            # Strict evidence verification: quote must be an exact substring within substantive patent text
+            is_verbatim = bool(is_substantive and quote_text and len(quote_text) >= 6 and quote_text.lower() in full_patent_text)
+            is_ver = (s_match >= 0.70 and is_verbatim)
+            real_quote = quote_text if is_verbatim else ""
 
             matched_features.append({
                 "feature": feat,
                 "target_feature": feat,
                 "match_type": m_level,
                 "match_level": m_level,
-                "evidence": quote_text if has_real_quote else "",
-                "patent_evidence": quote_text if has_real_quote else "",
-                "evidence_quote": quote_text if has_real_quote else None,
-                "evidence_source": source_sec if has_real_quote else "NOT_AVAILABLE",
-                "evidence_text_origin": source_sec if has_real_quote else "NOT_AVAILABLE",
-                "source_section": source_sec if has_real_quote else "NOT_AVAILABLE",
+                "evidence": real_quote,
+                "patent_evidence": real_quote,
+                "evidence_quote": real_quote or None,
+                "evidence_source": source_sec if is_verbatim else "NOT_AVAILABLE",
+                "evidence_text_origin": source_sec if is_verbatim else "NOT_AVAILABLE",
+                "source_section": source_sec if is_verbatim else "NOT_AVAILABLE",
                 "confidence": round(s_match * 100.0, 1)
             })
 
@@ -643,13 +652,13 @@ def compute_hybrid_score(
                 "match_status": match_status_name,
                 "verification_status": "VERIFIED" if is_ver else "UNVERIFIED",
                 "similarity": round(s_match * 100.0, 1),
-                "evidence": quote_text if has_real_quote else "",
-                "evidence_text": quote_text if has_real_quote else "",
-                "evidence_quote": quote_text if has_real_quote else None,
-                "evidence_source": source_sec if has_real_quote else "NOT_AVAILABLE",
-                "evidence_text_origin": source_sec if has_real_quote else "NOT_AVAILABLE",
-                "source": source_sec if has_real_quote else "NOT_AVAILABLE",
-                "source_section": source_sec if has_real_quote else "NOT_AVAILABLE",
+                "evidence": real_quote,
+                "evidence_text": real_quote,
+                "evidence_quote": real_quote or None,
+                "evidence_source": source_sec if is_verbatim else "NOT_AVAILABLE",
+                "evidence_text_origin": source_sec if is_verbatim else "NOT_AVAILABLE",
+                "source": source_sec if is_verbatim else "NOT_AVAILABLE",
+                "source_section": source_sec if is_verbatim else "NOT_AVAILABLE",
                 "verified": is_ver
             })
 
@@ -670,9 +679,9 @@ def compute_hybrid_score(
     # Essential Feature Coverage
     essential_coverage = (essential_matched_count / len(clean_essential)) if clean_essential else 1.0
 
-    # Evidence Strength Score: Average evidence quote similarity across all features with specification quotes
+    # Evidence Strength Score: Average evidence quote similarity across only VERIFIED items with specification quotes
     if total_feats_count > 0:
-        sim_sum = sum(item.get("similarity", 0.0) for item in evidence_items if item.get("evidence") or item.get("verified"))
+        sim_sum = sum(item.get("similarity", 0.0) for item in evidence_items if item.get("verified") is True)
         evidence_strength = (sim_sum / (total_feats_count * 100.0))
     else:
         evidence_strength = 0.0
@@ -700,7 +709,7 @@ def compute_hybrid_score(
     domain_cpc_score = (0.7 * base_domain_sim) + (0.3 * cpc_overlap)
 
     # Final Score & Confidence Score via Authoritative Engine (25/35/20/10/10) with False-Positive Penalty
-    has_full_spec_text = bool(has_claims or has_desc)
+    has_full_spec_text = (has_claims or has_desc)
     has_any_spec_text = bool(has_claims or has_desc or (abstract_text and len(abstract_text) > 10) or (patent_title and len(patent_title) > 5))
 
     final_score, confidence_score, breakdown = calculate_deterministic_final_score(
@@ -781,5 +790,7 @@ def compute_hybrid_score(
         "has_core_match": bool(matched_features),
         "evidence_status": evidence_status,
         "claims_status": "AVAILABLE" if has_claims else "NOT_AVAILABLE",
-        "full_text_status": "AVAILABLE" if has_desc else "NOT_AVAILABLE"
+        "full_text_status": "AVAILABLE" if has_desc else "NOT_AVAILABLE",
+        "has_target_features": bool(clean_target_features),
+        "has_text_evidence": has_full_spec_text
     }

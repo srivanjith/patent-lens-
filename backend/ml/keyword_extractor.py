@@ -1,5 +1,5 @@
 import re
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Optional
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 GENERIC_DOMAIN_NOISE = {
@@ -45,11 +45,26 @@ TECHNICAL_SYNONYMS_MAP = {
     "lidar point cloud": ["laser scanner point cloud", "3d lidar measurement", "spatial point cloud data"],
     "waste segregation": ["waste sorting", "garbage classification", "refuse separation", "trash sorting", "recyclable material sorting"],
     "waste sorting": ["waste segregation", "garbage classification", "trash sorting", "material separation"],
-    "material classification": ["waste material identification", "waste type recognition", "trash category classification"]
+    "material classification": ["waste material identification", "waste type recognition", "trash category classification"],
+    # Agriculture & Smart Irrigation / Water Management
+    "soil moisture sensor": ["soil humidity sensor", "volumetric water content sensor", "subterranean moisture sensor", "ground moisture probe", "dielectric moisture sensor"],
+    "solenoid valve": ["electric valve", "electromagnetic valve", "actuated valve", "variable-rate solenoid valve", "irrigation valve"],
+    "automated water pump": ["water pump", "irrigation pump", "electric water pump", "pump actuator"],
+    "predictive irrigation": ["automated irrigation", "smart irrigation", "precision irrigation", "weather-based watering", "variable-rate irrigation"],
+    "crop-specific threshold": ["crop watering threshold", "soil moisture threshold", "irrigation setpoint"],
+    "rainfall prediction": ["weather forecast data", "precipitation prediction", "rain forecast", "weather prediction"]
 }
 
 # Domain-specific highly distinctive technical terms that signal specialized technical IP
 DISTINCTIVE_TECHNICAL_TERMS = {
+    # Agriculture & Smart Irrigation / Water Management
+    "soil moisture sensor", "soil moisture sensors", "soil moisture", "predictive irrigation",
+    "automated irrigation", "smart irrigation", "weather forecasting", "rainfall prediction",
+    "automated water pump", "water pump", "solenoid valve", "solenoid valves",
+    "crop-specific threshold", "crop water requirements", "water conservation",
+    "subterranean soil moisture", "variable-rate irrigation", "evapotranspiration",
+    "drip irrigation", "moisture sensor array", "npk sensor",
+
     # Waste Segregation & Automated Recycling
     "waste segregation", "waste sorting", "automated waste sorting", "material classification",
     "recyclable sorting", "waste item identification", "pneumatic sorting actuator",
@@ -93,25 +108,29 @@ def get_synonyms_for_term(term: str) -> List[str]:
     return synonyms
 
 def clean_technical_feature_phrase(phrase: str) -> str:
-    """Clean feature phrase by stripping leading/trailing generic noise words and incomplete n-gram fragments."""
+    """Clean feature phrase by stripping leading/trailing generic noise words, stopwords, and incomplete n-gram fragments."""
     if not phrase:
         return ""
     words = phrase.strip().split()
     NOISE_HEAD_TAIL = {
-        "based", "using", "collected", "smart", "system", "device", "method", "unit",
-        "module", "for", "with", "from", "via", "type", "mode", "process", "apparatus",
-        "technology", "mechanism", "data", "information"
+        "based", "using", "used", "collected", "smart", "system", "systems", "device", "devices",
+        "method", "methods", "unit", "units", "module", "modules", "for", "with", "from", "via",
+        "type", "mode", "process", "apparatus", "technology", "technical", "mechanism", "data", "information",
+        "the", "a", "an", "and", "or", "in", "on", "at", "to", "by", "of", "when", "that", "which",
+        "into", "as", "is", "are", "was", "were", "be", "has", "have", "had", "this", "these", "cost"
     }
     
-    # Strip leading noise words
-    while words and words[0].lower() in NOISE_HEAD_TAIL:
+    # Strip leading noise/stop words
+    while words and words[0].lower().rstrip("-.,;:") in NOISE_HEAD_TAIL:
         words.pop(0)
-    # Strip trailing noise words
-    while words and words[-1].lower() in NOISE_HEAD_TAIL:
+    # Strip trailing noise/stop words
+    while words and words[-1].lower().rstrip("-.,;:") in NOISE_HEAD_TAIL:
         words.pop()
         
     cleaned = " ".join(words).strip()
-    if len(cleaned.split()) == 1 and cleaned.lower() in NOISE_HEAD_TAIL:
+    cleaned = re.sub(r'[\s\-.,;:_]+$', '', cleaned).strip()
+    cleaned = re.sub(r'^[\s\-.,;:_]+', '', cleaned).strip()
+    if not cleaned or (len(cleaned.split()) == 1 and cleaned.lower() in NOISE_HEAD_TAIL) or len(cleaned) < 3:
         return ""
     return cleaned.title()
 
@@ -214,42 +233,57 @@ def extract_structured_invention_features(text: str) -> Dict[str, Any]:
         "synonyms_map": synonyms_map
     }
 
-def extract_atomic_technical_features(text: str, top_n: int = 9) -> List[str]:
+def extract_atomic_technical_features(text: str, top_n: int = 9, user_keywords: Optional[List[str]] = None) -> List[str]:
     """
     Extract atomic technical feature items (6-9 items) from target invention text.
-    Combines domain-specific matching with TF-IDF phrase decomposition.
+    Prioritizes distinctive technical keywords, structural multi-word phrases,
+    and cleans out broken fragments or stopword tails.
     """
     if not text or len(text.strip()) < 5:
         return []
 
     lower_text = text.lower()
-    features = []
+    features: List[str] = []
 
-    # 1. Direct matched distinctive phrases from domain vocabulary
+    def _add_feature(candidate: str):
+        cleaned = clean_technical_feature_phrase(candidate)
+        if not cleaned:
+            return
+        c_lower = cleaned.lower()
+        if c_lower in GENERIC_DOMAIN_NOISE:
+            return
+        # Ensure it has substantial meaning (at least 3 characters and not purely generic unigram)
+        if len(cleaned) < 3 or (len(cleaned.split()) == 1 and c_lower in {"control", "sensor", "valve", "pump", "system", "device", "method"}):
+            return
+        if not any(c_lower == f.lower() or (len(c_lower.split()) >= 2 and c_lower in f.lower()) for f in features):
+            features.append(cleaned)
+
+    # 1. Prioritize explicit user keywords if passed
+    if user_keywords:
+        for kw in user_keywords:
+            if kw and len(kw.strip()) > 3:
+                _add_feature(kw)
+
+    # 2. Direct matched distinctive phrases from domain vocabulary
     for d_term in DISTINCTIVE_TECHNICAL_TERMS:
         if d_term in lower_text:
-            title_case = d_term.title()
-            if not any(title_case.lower() in f.lower() or f.lower() in title_case.lower() for f in features):
-                features.append(title_case)
+            _add_feature(d_term)
 
-    # 2. Key structural patterns (e.g. "x arrangement", "x mechanism", "x control")
+    # 3. Key structural patterns (e.g. "x arrangement", "x mechanism", "x control")
     pattern_matches = re.findall(
         r'\b(?:continuous|intermittent|rotary|linear|orbital|gear|link|cam|follower|indexing|dwell|sensor|coil|circuit|signal|valve|laser|module|node|driver)\s+[a-z\-]+(?:\s+[a-z\-]+)?\b',
         lower_text
     )
     for p in pattern_matches:
         if len(p.split()) >= 2 and p.lower() not in GENERIC_DOMAIN_NOISE:
-            p_title = p.title()
-            if not any(p.lower() in f.lower() or f.lower() in p.lower() for f in features):
-                features.append(p_title)
+            _add_feature(p)
 
-    # 3. TF-IDF Extracted phrases & distinct terms
+    # 4. TF-IDF Extracted phrases & distinct terms
     extracted_concepts = extract_technical_concepts(text, top_n=8)
     for c in extracted_concepts:
-        if not any(c.lower() in f.lower() or f.lower() in c.lower() for f in features):
-            features.append(c)
+        _add_feature(c)
 
-    # Clean & format nicely
+    # Clean & format nicely, returning top_n
     clean_features = []
     for f in features:
         if f.lower() in GENERIC_DOMAIN_NOISE:
