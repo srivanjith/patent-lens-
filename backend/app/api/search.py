@@ -97,18 +97,28 @@ def perform_prior_art_search(
     user_embedding = embedding_service.generate_embedding(combined_text)
 
     # 2. Fetch live patent candidates via The Lens Patent API with configurable pipeline timeout
+    import uuid
     import concurrent.futures
+    from app.core.database import SessionLocal
+    search_req_id = str(uuid.uuid4())
+    logger.info(f"[SEARCH INIT] Search Request ID: {search_req_id} | Invention: '{request.title}' | Domain: '{request.domain}'")
+
     try:
         def _do_external_fetch():
-            return patent_api_service.fetch_and_cache_external_patents(
-                db=db,
-                title=request.title,
-                keywords=request.keywords,
-                domain=request.domain,
-                search_queries=gemini_queries,
-                cpc_candidates=cpc_candidates,
-                limit=50
-            )
+            thread_db = SessionLocal()
+            try:
+                return patent_api_service.fetch_and_cache_external_patents(
+                    db=thread_db,
+                    title=request.title,
+                    keywords=request.keywords,
+                    domain=request.domain,
+                    search_queries=gemini_queries,
+                    cpc_candidates=cpc_candidates,
+                    limit=50
+                )
+            finally:
+                thread_db.close()
+
         pipeline_timeout = getattr(settings, "EXTERNAL_API_PIPELINE_TIMEOUT", 25.0)
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ext_pool:
             ext_fut = ext_pool.submit(_do_external_fetch)
@@ -117,8 +127,16 @@ def perform_prior_art_search(
     except Exception as e:
         logger.warning(f"[PATENT API] External search timeout/note ({e}). Proceeding immediately with local dataset candidates.")
         fallback_lens_status = "LENS_API_UNAVAILABLE" if lens_api_service.is_configured else "LENS_UNCONFIGURED"
-        api_stats = {"patents_retrieved": 0, "patents_searched": 0, "lens_api_status": fallback_lens_status}
-
+        api_stats = {
+            "patents_retrieved": 0,
+            "patents_searched": 0,
+            "lens_api_status": fallback_lens_status,
+            "api_requests_attempted": 1 if lens_api_service.is_configured else 0,
+            "api_requests_failed": 1 if lens_api_service.is_configured else 0,
+            "api_requests_succeeded": 0,
+            "api_records_returned": 0,
+            "error_details": str(e)
+        }
 
     try:
         from app.core.database import IS_POSTGRES, HAS_PGVECTOR
@@ -126,15 +144,49 @@ def perform_prior_art_search(
         from app.core.database import IS_POSTGRES, HAS_PGVECTOR
     import numpy as np
 
+    raw_live_nums = api_stats.get("live_patent_numbers") if isinstance(api_stats, dict) else None
+    live_retrieved_set: set[str] = (
+        {str(x).strip() for x in raw_live_nums if isinstance(x, (str, int)) and str(x).strip()}
+        if isinstance(raw_live_nums, (list, tuple, set))
+        else set()
+    )
+
     live_patents = []
+    domain_patents = []
+    kw_patents = []
     recent_patents = []
     seed_patents = []
+
     try:
-        live_patents = db.query(Patent).filter(Patent.source_status == "LIVE_API").order_by(Patent.id.desc()).limit(150).all()
-        recent_patents = db.query(Patent).order_by(Patent.id.desc()).limit(150).all()
-        seed_patents = db.query(Patent).limit(100).all()
-    except Exception:
-        pass
+        # Priority 1: Exact live patents fetched for THIS request
+        if live_retrieved_set:
+            live_patents = db.query(Patent).filter(Patent.patent_number.in_(list(live_retrieved_set))).all()
+        else:
+            live_patents = db.query(Patent).filter(Patent.source_status == "LIVE_API").order_by(Patent.id.desc()).limit(100).all()
+
+        # Priority 2: Domain-relevant patents from Postgres (e.g. Agriculture for irrigation, Healthcare for wearables)
+        if request.domain:
+            domain_patents = db.query(Patent).filter(Patent.domain.ilike(f"%{request.domain}%")).limit(100).all()
+
+        # Priority 3: Keyword-matching patents from Postgres
+        for kw in (request.keywords or []):
+            kw_clean = kw.strip()
+            if len(kw_clean) >= 4:
+                matching_kws = db.query(Patent).filter(Patent.title.ilike(f"%{kw_clean}%")).limit(25).all()
+                kw_patents.extend(matching_kws)
+                if len(kw_patents) >= 60:
+                    break
+
+        # Priority 4: Recent and seed patents from Postgres
+        recent_patents = db.query(Patent).order_by(Patent.id.desc()).limit(100).all()
+        seed_patents = db.query(Patent).limit(50).all()
+    except Exception as e_db_fetch:
+        logger.warning(f"Database patent candidate query error: {e_db_fetch}")
+        try:
+            db.rollback()
+            seed_patents = db.query(Patent).limit(100).all()
+        except Exception:
+            seed_patents = []
 
     mongo_patents = []
     try:
@@ -149,7 +201,7 @@ def perform_prior_art_search(
         logger.warning(f"MongoDB patent fetch note: {e_mfetch}")
 
     patent_map = {}
-    for p in (live_patents + recent_patents + seed_patents):
+    for p in (live_patents + domain_patents + kw_patents + recent_patents + seed_patents):
         if p and p.patent_number:
             patent_map[p.patent_number] = p
 
@@ -158,7 +210,6 @@ def perform_prior_art_search(
             patent_map[mp.patent_number] = mp
 
     all_patents = list(patent_map.values())
-
 
     if not all_patents:
         raise HTTPException(
@@ -385,13 +436,35 @@ def perform_prior_art_search(
     pat_shortlisted: int = vector_shortlisted_count
     lens_status: str = str(api_stats.get("lens_api_status") or "LENS_OK")
 
-    # Structured Stage-by-Stage Retrieval Quality Logging & Single Search Trace
+    # Structured Stage-by-Stage Retrieval Quality Logging & Single Search Trace (Requirement 3)
+    structured_diagnostics = {
+        "search_request_id": search_req_id,
+        "invention_title": request.title,
+        "domain": request.domain,
+        "generated_search_queries": gemini_queries,
+        "selected_retrieval_provider": "The Lens Patent API (Primary), PatentsView (Fallback), arXiv (NPL)",
+        "selected_retrieval_endpoint": getattr(settings, "LENS_API_URL", "https://api.lens.org/patent/search"),
+        "external_request_actually_made": (lens_api_service.is_configured and not (getattr(settings, "TESTING", False) or False)),
+        "http_status": api_stats.get("http_status", 200 if pat_retrieved > 0 else (504 if lens_status == "LENS_API_UNAVAILABLE" else 200)),
+        "sanitized_error_details": api_stats.get("error_details", None),
+        "records_returned_lens": pat_retrieved,
+        "records_returned_patentsview": int(api_stats.get("patentsview_returned", 0)),
+        "records_returned_arxiv": int(api_stats.get("arxiv_returned", 0)),
+        "records_inserted_into_candidate_pool": len(candidate_patents),
+        "database_candidates_examined": database_candidates_examined,
+        "database_fallback_count": len(candidate_patents) if pat_retrieved == 0 else 0,
+        "vector_shortlist_count": vector_shortlisted_count,
+        "final_unique_result_count": len(top_10)
+    }
+    logger.info(f"[STRUCTURED SEARCH DIAGNOSTICS] {json.dumps(structured_diagnostics)}")
+
     logger.info("==================================================")
+    logger.info(f"[END-TO-END SEARCH TRACE] Search ID: {search_req_id}")
     logger.info(f"[END-TO-END SEARCH TRACE] User Invention: '{request.title}' | Domain: '{request.domain}'")
     logger.info(f"[END-TO-END SEARCH TRACE] Extracted Essential Features: {gemini_essential}")
     logger.info(f"[END-TO-END SEARCH TRACE] Generated Queries: {gemini_queries}")
-    logger.info(f"[END-TO-END SEARCH TRACE] Lens API Endpoint: https://api.lens.org/patent/search | Method: POST")
-    logger.info(f"[END-TO-END SEARCH TRACE] Lens API Status: {lens_status} | Live Records Returned: {pat_retrieved}")
+    logger.info(f"[END-TO-END SEARCH TRACE] Retrieval Provider: The Lens Patent API | Endpoint: https://api.lens.org/patent/search")
+    logger.info(f"[END-TO-END SEARCH TRACE] Provider Status: {lens_status} | Live Records Returned: {pat_retrieved}")
     logger.info(f"[END-TO-END SEARCH TRACE] DB Candidates Evaluated: {database_candidates_examined} | Deduplicated Families: {len(family_grouped)}")
     logger.info(f"[END-TO-END SEARCH TRACE] Vector Shortlisted Candidates: {vector_shortlisted_count}")
     logger.info(f"[END-TO-END SEARCH TRACE] Stage 4 Rejected Irrelevant Candidates: {rejected_count}")
@@ -583,6 +656,7 @@ def perform_prior_art_search(
     )
 
     search_record = Search(
+        id=search_req_id,
         user_id=current_user.id,
         invention_title=request.title,
         domain=request.domain,
@@ -605,12 +679,12 @@ def perform_prior_art_search(
     try:
         db.add(search_record)
         db.commit()
-        db.refresh(search_record)
     except Exception as e_sql_s:
         db.rollback()
         logger.warning(f"SQL search record save note: {e_sql_s}")
 
     result_items_response = []
+    search_results_batch = []
 
     raw_live_nums = api_stats.get("live_patent_numbers") if isinstance(api_stats, dict) else None
     live_retrieved_set = set(raw_live_nums) if isinstance(raw_live_nums, (list, tuple, set)) else set()
@@ -872,7 +946,7 @@ def perform_prior_art_search(
         result_items_response.append(sri_item)
 
         sr = SearchResult(
-            search_id=search_record.id,
+            search_id=search_req_id,
             patent_id=pat.id,
             semantic_score=sc["semantic_score"],
             keyword_score=sc["keyword_score"],
@@ -882,11 +956,16 @@ def perform_prior_art_search(
             rank=idx,
             analysis_payload=sri_item.model_dump(mode="json")
         )
+        search_results_batch.append(sr)
+
+    # Batch commit all SearchResult records to avoid lock contention
+    if search_results_batch:
         try:
-            db.add(sr)
+            db.add_all(search_results_batch)
             db.commit()
-        except Exception:
+        except Exception as e_sr_batch:
             db.rollback()
+            logger.warning(f"SQL search results batch save note: {e_sr_batch}")
 
     # Save search record and embedded results to MongoDB Atlas SearchDoc
     try:

@@ -229,7 +229,12 @@ export const api = {
       }
       return data;
     } catch (err: any) {
-      console.warn("Backend search failed or unreachable, generating fallback prior-art analysis:", err);
+      // If backend responded with an error (400, 422, 500, etc.), propagate it so issues are not masked
+      if (err?.message && !err.message.includes("Failed to connect")) {
+        console.error("[Search Error] Backend returned error:", err.message);
+        throw err;
+      }
+      console.warn("Backend server offline or unreachable, generating fallback prior-art analysis:", err);
       return generateClientMockSearchResponse(payload);
     }
   },
@@ -399,8 +404,8 @@ function generateClientMockSearchResponse(payload: SearchFormData): PriorArtSear
         publication_date: "2023-11-14",
         domain: domain,
         source_url: "https://patents.google.com/patent/US11849204B2/en",
-        source_type: "USPTO",
-        document_type: "Grant",
+        source_type: "FALLBACK",
+        document_type: "DEMO RECORD",
         cpc_codes: "G06N 3/08, G05B 13/02",
         jurisdiction: "US"
       },
@@ -482,8 +487,8 @@ function generateClientMockSearchResponse(payload: SearchFormData): PriorArtSear
         publication_date: "2022-05-19",
         domain: domain,
         source_url: "https://patents.google.com/patent/US10928371B1/en",
-        source_type: "USPTO",
-        document_type: "Grant",
+        source_type: "FALLBACK",
+        document_type: "DEMO RECORD",
         jurisdiction: "US"
       },
       semantic_score: 62,

@@ -64,8 +64,8 @@ function generateMockSearchResponse(body: any): any {
         publication_date: "2023-11-14",
         domain: domain,
         source_url: "https://patents.google.com/patent/US11849204B2/en",
-        source_type: "USPTO",
-        document_type: "Grant",
+        source_type: "FALLBACK",
+        document_type: "DEMO RECORD",
         cpc_codes: "G06N 3/08, G05B 13/02",
         jurisdiction: "US"
       },
@@ -146,8 +146,8 @@ function generateMockSearchResponse(body: any): any {
         publication_date: "2022-05-19",
         domain: domain,
         source_url: "https://patents.google.com/patent/US10928371B1/en",
-        source_type: "USPTO",
-        document_type: "Grant",
+        source_type: "FALLBACK",
+        document_type: "DEMO RECORD",
         jurisdiction: "US"
       },
       semantic_score: 62,
@@ -412,27 +412,28 @@ async function handleRequest(req: NextRequest, { params }: { params: Promise<{ p
 
       const body = req.method !== "GET" && req.method !== "HEAD" ? await req.text() : undefined;
 
+      const isSearchEndpoint = cleanSubPath.includes("search");
+      const proxyTimeoutMs = isSearchEndpoint ? 60000 : 15000;
+
       const res = await fetch(targetUrl, {
         method: req.method,
         headers,
         body,
-        signal: AbortSignal.timeout(4000),
+        signal: AbortSignal.timeout(proxyTimeoutMs),
       });
 
-      if (res.ok || res.status < 500) {
-        const contentType = res.headers.get("content-type") || "";
-        if (contentType.includes("application/json")) {
-          const data = await res.json().catch(() => ({}));
-          return NextResponse.json(data, { status: res.status });
-        } else {
-          const text = await res.text();
-          return new NextResponse(text, {
-            status: res.status,
-            headers: {
-              "content-type": contentType || "text/plain",
-            },
-          });
-        }
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const data = await res.json().catch(() => ({}));
+        return NextResponse.json(data, { status: res.status });
+      } else {
+        const text = await res.text();
+        return new NextResponse(text, {
+          status: res.status,
+          headers: {
+            "content-type": contentType || "text/plain",
+          },
+        });
       }
     } catch (proxyErr: any) {
       console.warn(`[API Proxy Warning] Failed connecting to backend server (${targetBackend}):`, proxyErr?.message || proxyErr);

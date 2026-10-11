@@ -2,7 +2,7 @@ import logging
 import json
 import time
 import httpx
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -108,12 +108,12 @@ class PatentAPIService:
         if not is_testing and len(raw_candidates) < 10:
             logger.info("[PATENT API] Querying supplementary patent records from PatentsView API...")
             api_requests_attempted += 1
-            supp_candidates = self._fetch_from_patentsview(title, keywords, domain, limit=target_limit - len(raw_candidates))
-            if supp_candidates:
+            supp_candidates, supp_ok, supp_status = self._fetch_from_patentsview(title, keywords, domain, limit=target_limit - len(raw_candidates))
+            if supp_ok:
                 api_requests_succeeded += 1
                 api_records_returned += len(supp_candidates)
             else:
-                api_requests_succeeded += 1
+                api_requests_failed += 1
             for sc in supp_candidates:
                 sc["source_status"] = "FALLBACK"
             raw_candidates.extend(supp_candidates)
@@ -122,12 +122,12 @@ class PatentAPIService:
         if not is_testing:
             logger.info("[PATENT API] Fetching non-patent literature from arXiv Open Feed...")
             api_requests_attempted += 1
-            arxiv_records = self._fetch_from_arxiv(title, keywords, domain, limit=15)
-            if arxiv_records:
+            arxiv_records, arxiv_ok, arxiv_status = self._fetch_from_arxiv(title, keywords, domain, limit=15)
+            if arxiv_ok:
                 api_requests_succeeded += 1
                 api_records_returned += len(arxiv_records)
             else:
-                api_requests_succeeded += 1
+                api_requests_failed += 1
             for ar in arxiv_records:
                 ar["source_status"] = "LIVE_API"
             raw_candidates.extend(arxiv_records)
@@ -263,11 +263,11 @@ class PatentAPIService:
         keywords: List[str],
         domain: str,
         limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], bool, str]:
         """Fetch supplementary patent records from USPTO PatentsView API."""
         import os
         if getattr(settings, "TESTING", False) or os.getenv("TESTING", "").lower() == "true":
-            return []
+            return [], True, "skipped"
         query_terms = [k for k in (keywords or []) if len(k) > 2]
         if not query_terms and title:
             query_terms = [w for w in title.split() if len(w) > 3][:3]
@@ -288,37 +288,46 @@ class PatentAPIService:
             "o": {"page": 1, "per_page": min(limit, 25)}
         }
 
-        for attempt in range(3):
-            try:
-                with httpx.Client(timeout=10.0, follow_redirects=True) as http_client:
-                    res = http_client.post(url, json=payload, headers=headers)
-                    if res.status_code == 200:
-                        data = res.json()
-                        for p in data.get("patents") or []:
-                            p_num = p.get("patent_number")
-                            if p_num:
-                                results.append({
-                                    "patent_number": f"US-{p_num}",
-                                    "title": p.get("patent_title") or "Untitled US Patent",
-                                    "abstract": p.get("patent_abstract") or f"Abstract for patent US-{p_num}.",
-                                    "claims": "",
-                                    "description": f"Patent disclosure for US-{p_num}. Abstract: {p.get('patent_abstract', '')}",
-                                    "inventors": "USPTO Inventor",
-                                    "assignee": "USPTO Assignee",
-                                    "publication_date": p.get("patent_date") or "2023-01-01",
-                                    "source_url": f"https://patents.google.com/patent/US{p_num}/en",
-                                    "source_type": "USPTO",
-                                    "document_type": "PATENT",
-                                    "jurisdiction": "US"
-                                })
-                        break
-                    elif res.status_code in [429, 503]:
-                        time.sleep(1.5 * (attempt + 1))
-            except Exception as e:
-                logger.warning(f"PatentsView API attempt {attempt + 1} failed: {e}")
-                time.sleep(1.0)
-
-        return results
+        try:
+            with httpx.Client(timeout=3.0, follow_redirects=True) as http_client:
+                res = http_client.post(url, json=payload, headers=headers)
+                c_type = res.headers.get("content-type", "")
+                if res.status_code == 200 and "application/json" in c_type:
+                    data = res.json()
+                    for p in data.get("patents") or []:
+                        p_num = p.get("patent_number")
+                        if p_num:
+                            results.append({
+                                "patent_number": f"US-{p_num}",
+                                "title": p.get("patent_title") or "Untitled US Patent",
+                                "abstract": p.get("patent_abstract") or f"Abstract for patent US-{p_num}.",
+                                "claims": "",
+                                "description": f"Patent disclosure for US-{p_num}. Abstract: {p.get('patent_abstract', '')}",
+                                "inventors": "USPTO Inventor",
+                                "assignee": "USPTO Assignee",
+                                "publication_date": p.get("patent_date") or "2023-01-01",
+                                "source_url": f"https://patents.google.com/patent/US{p_num}/en",
+                                "source_type": "USPTO",
+                                "source_status": "FALLBACK",
+                                "document_type": "PATENT",
+                                "jurisdiction": "US"
+                            })
+                    return results, True, "success" if results else "success_empty"
+                elif res.status_code in [401, 403]:
+                    logger.warning(f"[PATENTSVIEW] Authentication error: HTTP {res.status_code}")
+                    return [], False, "authentication_error"
+                elif res.status_code == 429:
+                    logger.warning("[PATENTSVIEW] Rate limited HTTP 429")
+                    return [], False, "rate_limited"
+                else:
+                    logger.info(f"[PATENTSVIEW] Endpoint returned status {res.status_code} ({c_type[:30]}). Endpoint unavailable or redirected.")
+                    return [], False, "provider_error"
+        except (httpx.TimeoutException, TimeoutError):
+            logger.warning("[PATENTSVIEW] Request timed out.")
+            return [], False, "timeout"
+        except Exception as e:
+            logger.warning(f"[PATENTSVIEW] Supplementary fetch failed ({e}).")
+            return [], False, "provider_error"
 
     def _fetch_from_arxiv(
         self,
@@ -326,14 +335,14 @@ class PatentAPIService:
         keywords: List[str],
         domain: str,
         limit: int = 15
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], bool, str]:
         """
         Fetch Non-Patent Literature records from arXiv API.
         STRICT REQUIREMENT: Source must be labeled 'arXiv' and Document Type 'NON-PATENT LITERATURE'.
         """
         import os
         if getattr(settings, "TESTING", False) or os.getenv("TESTING", "").lower() == "true":
-            return []
+            return [], True, "skipped"
         import xml.etree.ElementTree as ET
         import urllib.parse
 
@@ -356,7 +365,7 @@ class PatentAPIService:
                 "User-Agent": "PatentLens-AI/1.0 (mailto:inventor@startup.com)",
                 "Accept": "application/atom+xml, application/xml, text/xml, */*"
             }
-            with httpx.Client(timeout=4.0, follow_redirects=True) as http_client:
+            with httpx.Client(timeout=2.5, follow_redirects=True) as http_client:
                 res = http_client.get(url_arxiv, headers=arxiv_headers)
                 if res.status_code == 200:
                     root = ET.fromstring(res.text)
@@ -398,13 +407,21 @@ class PatentAPIService:
                             "publication_date": p_date,
                             "source_url": f"https://arxiv.org/abs/{raw_id}",
                             "source_type": "arXiv",
+                            "source_status": "LIVE_API",
                             "document_type": "NON-PATENT LITERATURE",
                             "jurisdiction": "GLOBAL"
                         })
-        except Exception as e:
-            logger.warning(f"Error fetching from arXiv API: {e}")
-
-        return records
+                    return records, True, "success" if records else "success_empty"
+                elif res.status_code == 429:
+                    return [], False, "rate_limited"
+                else:
+                    return [], False, "provider_error"
+        except (httpx.TimeoutException, TimeoutError):
+            logger.info("[ARXIV] Request timed out. Proceeding without NPL records.")
+            return [], False, "timeout"
+        except Exception as e_ar:
+            logger.info(f"[ARXIV] Feed unreachable or DNS lookup failed ({e_ar}). Proceeding without NPL records.")
+            return [], False, "provider_error"
 
 
 patent_api_service = PatentAPIService()

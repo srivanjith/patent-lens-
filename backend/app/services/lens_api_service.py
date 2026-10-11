@@ -40,8 +40,20 @@ class LensAPIService:
         import re
         if not raw_q or not raw_q.strip():
             return "technology"
-        q = re.sub(r'claims:\(|\)|classifications_cpc\.symbol:|[&|/]', ' ', raw_q)
-        words = [w for w in re.findall(r'[a-zA-Z0-9]+', q) if len(w) > 2 and w.lower() not in {'for', 'and', 'the', 'with', 'msme', 'system', 'device', 'method', 'apparatus'}]
+        # Extract classification symbol if explicitly specified
+        cpc_match = re.search(r'classifications_cpc\.symbol:\s*["\']?([A-Za-z0-9/ ]+)["\']?', raw_q)
+        if cpc_match:
+            cpc_clean = re.sub(r'[^A-Za-z0-9]', '', cpc_match.group(1))
+            return cpc_clean if len(cpc_clean) >= 4 else "technology"
+
+        q = re.sub(r'claims:\(|\)|classifications_cpc\.symbol:|[&|/"]', ' ', raw_q)
+        noise = {
+            'for', 'and', 'the', 'with', 'msme', 'system', 'device', 'method', 'apparatus',
+            'based', 'using', 'via', 'from', 'into', 'over', 'under', 'between', 'during',
+            'through', 'about', 'above', 'below', 'such', 'this', 'that', 'these', 'those',
+            'classifications_cpc', 'symbol', 'claims', 'part', 'type', 'unit', 'means'
+        }
+        words = [w for w in re.findall(r'[a-zA-Z0-9]+', q) if len(w) > 2 and w.lower() not in noise]
         if len(words) >= 3:
             return f"{words[0]} AND {words[1]} AND {words[2]}"
         elif len(words) >= 2:
@@ -168,6 +180,10 @@ class LensAPIService:
                     else:
                         logger.error(f"[LENS HTTP DIAGNOSTICS] HTTP {res.status_code} LENS_API_UNAVAILABLE ({elapsed_ms}ms): {res.text[:200]}")
                         return [], "LENS_API_UNAVAILABLE", res.status_code, 0, 0
+            except (httpx.TimeoutException, TimeoutError) as e:
+                elapsed_ms = round((time.time() - start_time) * 1000.0, 1)
+                logger.warning(f"[LENS HTTP DIAGNOSTICS] Timeout LENS_API_UNAVAILABLE for query '{q_str}' ({elapsed_ms}ms): {e}")
+                return [], "LENS_API_UNAVAILABLE", 504, 0, 0
             except Exception as e:
                 elapsed_ms = round((time.time() - start_time) * 1000.0, 1)
                 logger.warning(f"[LENS HTTP DIAGNOSTICS] Exception LENS_API_UNAVAILABLE for query '{q_str}' ({elapsed_ms}ms): {e}")
@@ -496,12 +512,13 @@ class LensAPIService:
         if not self.is_configured or not cpc_codes:
             return []
 
-        cpc_queries = [f"classifications_cpc.symbol:\"{code.strip()}\"" for code in cpc_codes if code.strip()]
+        clean_codes = [c.strip() for c in cpc_codes if c and c.strip()][:2]
+        cpc_queries = [f"classifications_cpc.symbol:\"{code}\"" for code in clean_codes]
         if not cpc_queries:
             return []
 
-        logger.info(f"[LENS API] Executing independent CPC classification search for codes: {cpc_codes}")
-        res = self.search_patents(queries=cpc_queries, limit=limit)
+        logger.info(f"[LENS API] Executing independent CPC classification search for codes: {clean_codes}")
+        res = self.search_patents(queries=cpc_queries, limit=min(limit, 10))
         return res.get("results", [])
 
     def fetch_citations_and_family(
