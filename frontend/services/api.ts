@@ -191,27 +191,39 @@ export const api = {
     if (!token) {
       return null;
     }
-    if (!token.startsWith("demo_token_")) {
+    // Offline-generated tokens (token_login_*, token_reg_*, token_google_*,
+    // token_otp_*, demo_token_*) should NEVER call /auth/me — the proxy has no
+    // real backend and would return the hardcoded "Inventor User" mock response,
+    // overwriting whatever name the user actually typed at login.
+    // Real JWTs from the backend always start with "eyJ".
+    const isOfflineToken =
+      token.startsWith("demo_token_") ||
+      token.startsWith("token_login_") ||
+      token.startsWith("token_reg_") ||
+      token.startsWith("token_google_") ||
+      token.startsWith("token_otp_");
+    if (!isOfflineToken) {
       try {
         return await request<User>("/auth/me");
-      } catch (err) {
-        // Fallback if backend /auth/me fails
+      } catch {
+        // Backend unreachable — fall through to localStorage below
       }
     }
+    // Use the name/email saved to localStorage at login/register time
     const storedEmail = typeof window !== "undefined" ? localStorage.getItem("patentlens_user_email") : null;
-    const storedName = typeof window !== "undefined" ? localStorage.getItem("patentlens_user_name") : null;
-    const email = storedEmail || "inventor@startup.com";
+    const storedName  = typeof window !== "undefined" ? localStorage.getItem("patentlens_user_name")  : null;
+    const email = storedEmail || "user@patentlens.ai";
     let name = storedName;
     if (!name) {
-      const parts = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, " ");
+      const parts = email.split("@")[0].replace(/[^a-zA-Z0-9]/g, " ").trim();
       name = parts ? parts.charAt(0).toUpperCase() + parts.slice(1) : "User";
     }
     return {
       id: "user-" + email.replace(/[^a-zA-Z0-9]/g, "-"),
-      email: email,
-      name: name,
+      email,
+      name,
       created_at: new Date().toISOString(),
-      search_count: 3,
+      search_count: 0,
     } as User;
   },
 
@@ -266,8 +278,52 @@ export const api = {
 
   getSearchHistory: async (): Promise<SearchHistoryItem[]> => {
     try {
-      return await request<SearchHistoryItem[]>("/search/history");
+      const data = await request<SearchHistoryItem[]>("/search/history");
+      // If backend returned real data, also sync to localStorage for offline use
+      if (Array.isArray(data) && data.length > 0 && typeof window !== "undefined") {
+        try {
+          localStorage.setItem("patentlens_history_cache", JSON.stringify(data));
+        } catch {}
+      }
+      return data;
     } catch {
+      // Backend offline — rebuild history from per-search localStorage entries
+      if (typeof window !== "undefined") {
+        const items: SearchHistoryItem[] = [];
+        // First try the full history cache saved during a previous online session
+        try {
+          const cached = localStorage.getItem("patentlens_history_cache");
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          }
+        } catch {}
+        // Fall back to individual search results stored after each performSearch()
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (!key?.startsWith("patentlens_search_")) continue;
+          try {
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            const d = JSON.parse(raw);
+            if (d?.search_id && d?.invention_title) {
+              items.push({
+                id: d.search_id,
+                invention_title: d.invention_title,
+                domain: d.domain || "",
+                created_at: d.created_at || new Date().toISOString(),
+                highest_similarity: d.highest_similarity ?? 0,
+                risk_level: d.risk_level || "LOW",
+                total_results: d.summary?.total_results ?? 0,
+              });
+            }
+          } catch {}
+        }
+        // Newest first
+        return items.sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+      }
       return [];
     }
   },
