@@ -173,9 +173,18 @@ def get_db():
 # ==========================================
 
 mongo_client = None
+# Event loop captured at init_mongo() time (runs on the main asyncio thread).
+# Sync FastAPI route threads use get_app_loop() + run_coroutine_threadsafe().
+_app_event_loop = None
+
+def get_app_loop():
+    """Return the main FastAPI event loop, or None if not yet initialised."""
+    return _app_event_loop
+
 
 async def init_mongo():
-    global mongo_client
+    global mongo_client, _app_event_loop
+    import asyncio
     mongo_url = getattr(settings, "MONGODB_URL", "mongodb://localhost:27017/patentlens")
     db_name = getattr(settings, "MONGODB_DB_NAME", "patentlens")
     try:
@@ -190,6 +199,8 @@ async def init_mongo():
             database=cast(Any, mongo_client[db_name]),
             document_models=[UserDoc, PatentDoc, SearchDoc, SavedPatentDoc, ReportDoc]
         )
+        # Capture the running loop so sync threads can use run_coroutine_threadsafe
+        _app_event_loop = asyncio.get_event_loop()
         logger.info("MongoDB & Beanie Document ORM initialized successfully.")
     except Exception as e:
         logger.warning(f"MongoDB initialization note: {e}")

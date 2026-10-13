@@ -690,58 +690,6 @@ def perform_prior_art_search(
         db.rollback()
         logger.warning(f"[DB] SQL search record save failed ({e_sql_s}). Will write to MongoDB.")
 
-    # Always attempt MongoDB write (dual persistence when SQL succeeds; sole persistence when SQL fails)
-    try:
-        from app.models.models import SearchDoc
-        import asyncio
-
-        mongo_doc = SearchDoc(
-            id=search_req_id,
-            user_id=str(current_user.id),
-            invention_title=request.title,
-            domain=request.domain,
-            problem_statement=request.problem_statement,
-            description=request.description,
-            keywords=request.keywords or [],
-            risk_level=risk_info["risk_level"],
-            highest_similarity=highest_similarity,
-            total_results=total_matches_count,
-            very_high_similarity=vhigh_count,
-            high_similarity=high_count,
-            moderate_similarity=mod_count,
-            low_similarity=low_count,
-            patents_searched=pat_searched,
-            patents_retrieved=pat_retrieved,
-            patents_shortlisted=pat_shortlisted,
-            patents_deeply_analyzed=pat_deeply_analyzed,
-            pipeline_metrics=pipeline_metrics.model_dump(mode="json"),
-        )
-
-        async def _save_to_mongo():
-            await mongo_doc.insert()
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We are inside a sync FastAPI route - run in a new thread
-                import concurrent.futures
-                future = concurrent.futures.Future()
-                def _run():
-                    asyncio.run(_save_to_mongo())
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as p:
-                    p.submit(_run).result(timeout=5.0)
-            else:
-                loop.run_until_complete(_save_to_mongo())
-        except RuntimeError:
-            asyncio.run(_save_to_mongo())
-
-        mode = "dual-persistence" if sql_saved else "MONGODB FALLBACK (SQL failed)"
-        logger.info(f"[DB] Search record {search_req_id} written to MongoDB [{mode}].")
-    except Exception as e_mongo_s:
-        logger.warning(f"[DB] MongoDB search record write note: {e_mongo_s}")
-        if not sql_saved:
-            logger.error(f"[DB] Search {search_req_id} could not be persisted to either SQL or MongoDB.")
-
 
 
     result_items_response = []
@@ -1075,10 +1023,18 @@ def perform_prior_art_search(
             results=mongo_sris
         )
         try:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(s_doc.insert())
-        except Exception:
-            asyncio.run(s_doc.insert())
+            from app.core.database import get_app_loop
+            import asyncio
+            _loop = get_app_loop()
+            if _loop is not None and _loop.is_running():
+                # Correct way to call async Beanie code from a sync thread-pool route
+                asyncio.run_coroutine_threadsafe(s_doc.insert(), _loop).result(timeout=5.0)
+            else:
+                # Fallback: no app loop yet (unit tests / CLI)
+                asyncio.run(s_doc.insert())
+        except Exception as e_insert:
+            logger.warning(f"MongoDB SearchDoc insert note: {e_insert}")
+            raise  # re-raise so the outer except catches it
         logger.info(f"✅ Successfully persisted SearchDoc '{search_record.id}' to MongoDB Atlas!")
     except Exception as e_mongo_save:
         logger.warning(f"MongoDB SearchDoc save note: {e_mongo_save}")
