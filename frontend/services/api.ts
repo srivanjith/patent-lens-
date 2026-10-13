@@ -229,19 +229,38 @@ export const api = {
       }
       return data;
     } catch (err: any) {
-      // If backend responded with an application error (400, 422, 500, etc.), propagate it so issues are not masked,
-      // but if the backend is unreachable, connection failed, or blocked by infrastructure auth (e.g. Vercel deployment protection), fall back gracefully
-      const isConnectionOrInfraIssue =
-        !err?.message ||
-        err.message.includes("Failed to connect") ||
-        err.message.includes("Vercel Authentication") ||
-        err.message.includes("Protected deployment");
-      if (!isConnectionOrInfraIssue) {
-        console.error("[Search Error] Backend returned error:", err.message);
-        throw err;
+      // BACKEND_OFFLINE (503) means the proxy proxy has no real backend configured or the
+      // Render service is sleeping/down. Surface this as a real error — never present demo data
+      // as if it were a real patent search result.
+      const errMsg: string = err?.message || "";
+      const isBackendOffline =
+        errMsg.includes("BACKEND_OFFLINE") ||
+        errMsg.includes("backend service is currently unavailable") ||
+        errMsg.includes("waking up from sleep");
+      if (isBackendOffline) {
+        throw new Error(
+          "The patent search backend is currently offline. " +
+          "The Render free-tier service may be waking up — please wait 30 seconds and try again. " +
+          "If the problem persists, contact the administrator to verify the BACKEND_URL is set in Vercel."
+        );
       }
-      console.warn("Backend server offline or unreachable, generating fallback prior-art analysis:", err);
-      return generateClientMockSearchResponse(payload);
+
+      // For genuine network connectivity failures (DNS, ECONNREFUSED, AbortError),
+      // fall through to the offline error below — do NOT silently return demo data.
+      const isNetworkFailure =
+        !errMsg ||
+        errMsg.includes("Failed to connect") ||
+        errMsg.includes("NetworkError") ||
+        errMsg.includes("fetch failed");
+      if (isNetworkFailure) {
+        throw new Error(
+          "Cannot reach the patent search backend. Please check your connection and try again."
+        );
+      }
+
+      // For all other application-level errors (400, 422, 500 with JSON body), propagate as-is.
+      console.error("[Search Error] Backend returned error:", errMsg);
+      throw err;
     }
   },
 

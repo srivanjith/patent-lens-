@@ -19,6 +19,7 @@ function getBackendUrl(): string | null {
     return "http://127.0.0.1:8000";
   }
 
+  // --- PRODUCTION (Vercel) path ---
   const envUrl =
     process.env.BACKEND_URL ||
     process.env.PYTHON_BACKEND_URL ||
@@ -30,10 +31,40 @@ function getBackendUrl(): string | null {
     if (clean === "/api" || clean.endsWith("/api")) {
       clean = clean.replace(/\/api$/, "");
     }
-    // Never proxy to vercel.app domains (self-referential frontend loop or protected preview deployments)
-    if (clean && clean.startsWith("http") && !clean.includes("vercel.app")) {
+
+    // Reject self-referential Vercel frontend URLs
+    if (clean.includes("vercel.app")) {
+      console.error(
+        `[API Proxy] BACKEND_URL points to a vercel.app domain (${clean}). ` +
+        "This would create a self-referential loop. Set BACKEND_URL to the Render backend HTTPS URL instead."
+      );
+      return null;
+    }
+
+    // CRITICAL: Reject localhost/127.0.0.1 — these are unreachable from Vercel's serverless runtime
+    if (clean.includes("localhost") || clean.includes("127.0.0.1")) {
+      console.error(
+        `[API Proxy] BACKEND_URL is set to a localhost address. ` +
+        "This address is unreachable from Vercel production. " +
+        "Add BACKEND_URL=https://patent-prior-art-backend.onrender.com to Vercel project environment variables."
+      );
+      return null;
+    }
+
+    // Accept any real external https:// URL
+    if (clean.startsWith("https://")) {
       return clean;
     }
+
+    console.error(
+      `[API Proxy] BACKEND_URL value is not a valid https:// URL. Got: ${clean.substring(0, 40)}. ` +
+      "Set BACKEND_URL=https://patent-prior-art-backend.onrender.com in Vercel environment variables."
+    );
+  } else {
+    console.error(
+      "[API Proxy] No backend URL configured. " +
+      "Add BACKEND_URL=https://patent-prior-art-backend.onrender.com to Vercel project environment variables (Settings > Environment Variables)."
+    );
   }
 
   return null;
@@ -280,13 +311,27 @@ function generateMockSearchResponse(body: any): any {
 async function handleMockFallback(subPath: string, req: NextRequest) {
   const cleanPath = subPath.startsWith("api/") ? subPath.slice(4) : subPath;
 
+  // IMPORTANT: /search POST must never silently return demo data as if it were real results.
+  // Return 503 Service Unavailable so the frontend can surface a clear error to the user.
   if (req.method === "POST" && (cleanPath === "search" || cleanPath === "search/")) {
-    try {
-      const body = await req.json();
-      return NextResponse.json(generateMockSearchResponse(body));
-    } catch {
-      return NextResponse.json(generateMockSearchResponse({}));
-    }
+    console.error(
+      "[API Proxy] Search request received but backend is offline or not configured. " +
+      "Returning 503. Set BACKEND_URL=https://patent-prior-art-backend.onrender.com in Vercel environment variables."
+    );
+    return NextResponse.json(
+      {
+        success: false,
+        error: "BACKEND_OFFLINE",
+        message:
+          "The patent search backend service is currently unavailable. " +
+          "Please try again in a moment — the backend may be waking up from sleep (Render free tier). " +
+          "If this persists, the BACKEND_URL Vercel environment variable may not be configured.",
+        retry_after_seconds: 30,
+        is_demo_dataset: false,
+        data_source: "BACKEND_OFFLINE"
+      },
+      { status: 503 }
+    );
   }
 
   if (cleanPath.startsWith("search/")) {

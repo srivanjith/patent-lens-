@@ -7,16 +7,39 @@ services:
     plan: free
     region: oregon
     autoDeploy: false
+    healthCheckPath: /
     envVars:
+      - key: ENVIRONMENT
+        value: "production"
+      - key: PORT
+        value: "8000"
       - key: DATABASE_URL
         sync: false
-      - key: GEMINI_API_KEY
+      - key: MONGODB_URL
         sync: false
-      - key: GROQ_API_KEY
-        sync: false
+      - key: MONGODB_DB_NAME
+        value: "patentlens"
       - key: JWT_SECRET
+        sync: false
+      - key: JWT_REFRESH_SECRET
         sync: false
       - key: FRONTEND_URL
         sync: false
-      - key: PORT
-        value: "8000"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: "gemini-2.5-flash"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: "llama-3.3-70b-versatile"
+      - key: LLM_PROVIDER
+        value: "groq"
+      - key: MODEL_NAME
+        value: "all-MiniLM-L6-v2"
+      - key: LENS_API_TOKEN
+        sync: false
+      - key: LENS_API_URL
+        value: "https://api.lens.org/patent/search"
+      - key: MAX_EXTERNAL_API_RESULTS
+        value: "100"
