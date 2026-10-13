@@ -429,9 +429,12 @@ def perform_prior_art_search(
         else:
             low_count += 1
 
-    total_matches_count = len(top_10)
-
+    # Use Lens API total_searched as "Total Matches" (shows full open-world search scope like 1110)
+    # Falls back to api_records_returned -> top_10 count
+    lens_total_searched: int = int(api_stats.get("lens_total_searched") or 0)
     pat_retrieved: int = int(api_stats.get("api_records_returned") or api_stats.get("patents_retrieved") or 0)
+    total_matches_count = lens_total_searched if lens_total_searched > 0 else (pat_retrieved if pat_retrieved > 0 else len(top_10))
+
     pat_searched: int = int(api_stats.get("patents_searched") or (database_candidates_examined + pat_retrieved))
     pat_shortlisted: int = vector_shortlisted_count
     lens_status: str = str(api_stats.get("lens_api_status") or "LENS_OK")

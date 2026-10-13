@@ -126,7 +126,12 @@ class LensAPIService:
         def _fetch_single_lens_query(q_str: str) -> Tuple[List[Dict[str, Any]], str, int, int, int]:
             clean_q = self._sanitize_query_for_lens(q_str)
             p_payload = {
-                "query": clean_q,
+                "query": {
+                    "query_string": {
+                        "query": clean_q,
+                        "fields": ["title", "abstract", "claims", "description", "classifications_cpc.symbol"]
+                    }
+                },
                 "size": min(25, limit),
                 "from": 0,
                 "include": [
