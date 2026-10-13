@@ -679,12 +679,70 @@ def perform_prior_art_search(
         patents_deeply_analyzed=pat_deeply_analyzed,
         pipeline_metrics=pipeline_metrics.model_dump(mode="json")
     )
+    # ---- Dual-DB persistence: PostgreSQL/SQL first, MongoDB as fallback/mirror ----
+    sql_saved = False
     try:
         db.add(search_record)
         db.commit()
+        sql_saved = True
+        logger.info(f"[DB] Search record {search_req_id} saved to SQL.")
     except Exception as e_sql_s:
         db.rollback()
-        logger.warning(f"SQL search record save note: {e_sql_s}")
+        logger.warning(f"[DB] SQL search record save failed ({e_sql_s}). Will write to MongoDB.")
+
+    # Always attempt MongoDB write (dual persistence when SQL succeeds; sole persistence when SQL fails)
+    try:
+        from app.models.models import SearchDoc
+        import asyncio
+
+        mongo_doc = SearchDoc(
+            id=search_req_id,
+            user_id=str(current_user.id),
+            invention_title=request.title,
+            domain=request.domain,
+            problem_statement=request.problem_statement,
+            description=request.description,
+            keywords=request.keywords or [],
+            risk_level=risk_info["risk_level"],
+            highest_similarity=highest_similarity,
+            total_results=total_matches_count,
+            very_high_similarity=vhigh_count,
+            high_similarity=high_count,
+            moderate_similarity=mod_count,
+            low_similarity=low_count,
+            patents_searched=pat_searched,
+            patents_retrieved=pat_retrieved,
+            patents_shortlisted=pat_shortlisted,
+            patents_deeply_analyzed=pat_deeply_analyzed,
+            pipeline_metrics=pipeline_metrics.model_dump(mode="json"),
+        )
+
+        async def _save_to_mongo():
+            await mongo_doc.insert()
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We are inside a sync FastAPI route - run in a new thread
+                import concurrent.futures
+                future = concurrent.futures.Future()
+                def _run():
+                    asyncio.run(_save_to_mongo())
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as p:
+                    p.submit(_run).result(timeout=5.0)
+            else:
+                loop.run_until_complete(_save_to_mongo())
+        except RuntimeError:
+            asyncio.run(_save_to_mongo())
+
+        mode = "dual-persistence" if sql_saved else "MONGODB FALLBACK (SQL failed)"
+        logger.info(f"[DB] Search record {search_req_id} written to MongoDB [{mode}].")
+    except Exception as e_mongo_s:
+        logger.warning(f"[DB] MongoDB search record write note: {e_mongo_s}")
+        if not sql_saved:
+            logger.error(f"[DB] Search {search_req_id} could not be persisted to either SQL or MongoDB.")
+
+
 
     result_items_response = []
     search_results_batch = []

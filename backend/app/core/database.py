@@ -23,6 +23,7 @@ def _get_masked_db_url(url: str) -> str:
 
 IS_POSTGRES = settings.DATABASE_URL.startswith("postgresql")
 HAS_PGVECTOR = False
+ACTIVE_DB = "sqlite"  # updated below after successful connection
 
 is_production = (getattr(settings, "ENVIRONMENT", "development").lower() == "production" or os.getenv("ENVIRONMENT", "").lower() == "production")
 
@@ -36,7 +37,7 @@ sqlite_dir = "/tmp" if (is_production or is_vercel) else "."
 SQLITE_URL = f"sqlite:///{os.path.normpath(os.path.join(sqlite_dir, 'patentlens.db'))}"
 
 if IS_POSTGRES:
-    logger.info("Database backend: PostgreSQL")
+    logger.info("Database backend: PostgreSQL (primary)")
     logger.info(f"Database host: {_get_masked_db_url(db_url)}")
     try:
         engine = create_engine(
@@ -52,19 +53,29 @@ if IS_POSTGRES:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
                 conn.commit()
                 HAS_PGVECTOR = True
-                logger.info("Connected to PostgreSQL and verified pgvector extension.")
+                logger.info("✅ PostgreSQL connected with pgvector extension.")
             except Exception as ve:
-                logger.info(f"Connected to PostgreSQL successfully! (pgvector extension note: {ve})")
+                logger.info(f"✅ PostgreSQL connected. (pgvector extension note: {ve})")
+        ACTIVE_DB = "postgresql"
     except Exception as e:
-        logger.warning(f"PostgreSQL connection failed ({_get_masked_db_url(db_url)}: {e}). Switching to SQLite fallback.")
+        logger.warning(
+            f"⚠️  PostgreSQL connection failed ({_get_masked_db_url(db_url)}: {e}). "
+            "Falling back to SQLite. MongoDB will serve as the secondary store — "
+            "set MONGODB_URL in environment variables for full dual-DB operation."
+        )
         IS_POSTGRES = False
         engine = create_engine(SQLITE_URL, connect_args={"check_same_thread": False})
+        ACTIVE_DB = "sqlite_fallback"
 else:
     logger.info("Database backend: SQLite (Development/Testing)")
     engine = create_engine(
         SQLITE_URL,
         connect_args={"check_same_thread": False}
     )
+    ACTIVE_DB = "sqlite"
+
+logger.info(f"[DB] Active relational database: {ACTIVE_DB}")
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
