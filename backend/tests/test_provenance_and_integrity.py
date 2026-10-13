@@ -159,6 +159,7 @@ def test_temporal_status_classification():
     )
 
     r_date = req.reference_date
+    assert r_date is not None, "reference_date should not be None when explicitly provided"
     p_date_before = "2023-05-10"
     p_date_after = "2024-06-15"
 
