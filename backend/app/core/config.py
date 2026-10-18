@@ -39,12 +39,12 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
 
     # Machine Learning & AI Services
-    LLM_PROVIDER: str = "groq"
+    LLM_PROVIDER: str = "gemini"
     MODEL_NAME: str = "all-MiniLM-L6-v2"
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama3-70b-8192"
+    GROQ_MODEL: str = "llama3-8b-8192"
 
 
     # External Patent APIs Configuration

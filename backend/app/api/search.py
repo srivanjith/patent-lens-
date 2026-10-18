@@ -546,12 +546,13 @@ def perform_prior_art_search(
 
     pair_analysis_map = {}
     if top_10:
-        pair_timeout = 1.0 if (not llm_service.is_configured or lens_status == "LENS_RATE_LIMITED") else 4.0
-        with ThreadPoolExecutor(max_workers=min(10, len(top_10))) as pool:
+        pair_timeout = 8.0 if llm_service.is_configured else 1.0
+        with ThreadPoolExecutor(max_workers=min(2, len(top_10))) as pool:
+
             futures = [pool.submit(_execute_pair_analysis, item_tuple) for item_tuple in enumerate(top_10, start=1)]
             for fut in futures:
                 try:
-                    i_idx, res_analysis, prov_used, is_success = fut.result(timeout=pair_timeout)
+                    i_idx, res_analysis, prov_used, is_success = fut.result()                   
                     pair_analysis_map[i_idx] = res_analysis
                     if configured_provider == "groq":
                         groq_requests_attempted += 1

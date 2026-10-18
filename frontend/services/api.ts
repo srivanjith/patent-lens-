@@ -102,28 +102,24 @@ export const api = {
     return data;
   },
 
-  login: async (payload: any): Promise<TokenResponse> => {
-    let data: TokenResponse;
-    try {
-      data = await request<TokenResponse>("/auth/login", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-    } catch {
-      const email = payload?.email || "inventor@startup.com";
-      const name = email.split("@")[0];
-      data = {
-        access_token: `token_login_${Date.now()}`,
-        token_type: "bearer",
-        user: { id: `user_${Date.now()}`, email, name, created_at: new Date().toISOString() }
-      };
+  
+login: async (payload: any): Promise<TokenResponse> => {
+  const data = await request<TokenResponse>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  if (data.access_token && !data.require_otp) {
+    setStoredToken(data.access_token);
+
+    if (data.user) {
+      saveUserData(data.user);
     }
-    if (data.access_token && !data.require_otp) {
-      setStoredToken(data.access_token);
-      if (data.user) saveUserData(data.user);
-    }
-    return data;
-  },
+  }
+
+  return data;
+},
+
 
   googleAuth: async (payload: { email: string; name?: string }): Promise<TokenResponse> => {
     let data: TokenResponse;
