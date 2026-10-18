@@ -2,10 +2,23 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   async rewrites() {
-    const rawUrl = (process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "").trim();
+    // BACKEND_URL is a server-side-only env var set in Vercel project settings.
+    // It must be the full URL of the deployed backend (e.g. https://patent-backend.vercel.app).
+    // NEXT_PUBLIC_API_BASE_URL is used as a fallback (also set in Vercel env settings).
+    const backendUrl = (process.env.BACKEND_URL || "").trim();
+    const publicUrl = (process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "").trim();
 
-    // Do NOT rewrite if empty, pointing to self, or pointing to vercel.app without dedicated backend domain
-    if (!rawUrl || rawUrl.includes("vercel.app") || rawUrl === "/api" || rawUrl === "api") {
+    // Prefer BACKEND_URL (server-side, never exposed to client). Fall back to public URL.
+    let rawUrl = backendUrl || publicUrl;
+
+    // Skip rewriting if nothing useful is set or it points to localhost (local dev uses direct calls)
+    if (
+      !rawUrl ||
+      rawUrl === "/api" ||
+      rawUrl === "api" ||
+      rawUrl.includes("localhost") ||
+      rawUrl.includes("127.0.0.1")
+    ) {
       return [];
     }
 
@@ -13,7 +26,10 @@ const nextConfig: NextConfig = {
     if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
       targetUrl = `https://${targetUrl}`;
     }
-    targetUrl = targetUrl.endsWith("/api") ? targetUrl : `${targetUrl.replace(/\/$/, "")}/api`;
+    // Ensure the target ends with /api
+    targetUrl = targetUrl.endsWith("/api")
+      ? targetUrl
+      : `${targetUrl.replace(/\/$/, "")}/api`;
 
     return [
       {
