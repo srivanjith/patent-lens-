@@ -216,14 +216,69 @@ class PatentAPIService:
                 jurisdiction=item.get("jurisdiction", "US"),
                 embedding=json.dumps(emb) if isinstance(emb, list) else emb
             )
-            db.add(new_patent)
-            newly_cached_patents.append(new_patent)
+            try:
+                db.add(new_patent)
+                newly_cached_patents.append(new_patent)
+            except Exception:
+                pass
 
         if newly_cached_patents:
-            db.commit()
-            logger.info(f"[PATENT API] Successfully cached {len(newly_cached_patents)} new records into database.")
+            try:
+                db.commit()
+                logger.info(f"[PATENT API] Successfully cached {len(newly_cached_patents)} new records into SQL cache.")
+            except Exception as e_sql_c:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                logger.debug(f"[PATENT API] SQL cache commit note: {e_sql_c}")
 
-        total_db_patents = db.query(Patent).count()
+        # Also persist newly retrieved patents to MongoDB Atlas (primary document store)
+        try:
+            from app.models.models import PatentDoc
+            from app.core.database import get_app_loop
+            import asyncio
+
+            async def _cache_mongo_patents():
+                for idx_m, (item_m, p_num_m, p_title_m, p_abs_m, p_claims_m, p_desc_m) in enumerate(items_to_process):
+                    emb_m = embeddings[idx_m] if idx_m < len(embeddings) else []
+                    existing_doc = await PatentDoc.find_one(PatentDoc.patent_number == p_num_m)
+                    if not existing_doc:
+                        p_doc = PatentDoc(
+                            patent_number=p_num_m,
+                            lens_id=item_m.get("lens_id"),
+                            title=p_title_m,
+                            abstract=p_abs_m,
+                            claims=p_claims_m,
+                            description=p_desc_m,
+                            inventors=item_m.get("inventors") or "Independent Author",
+                            assignee=item_m.get("assignee") or "Independent Institution",
+                            publication_date=item_m.get("publication_date") or "2024-01-01",
+                            domain=domain or "Technology",
+                            source_url=item_m.get("source_url") or f"https://patents.google.com/patent/{p_num_m}/en",
+                            source_type=item_m.get("source_type") or "THE LENS",
+                            source_status=item_m.get("source_status") or "LIVE_API",
+                            document_type=item_m.get("document_type") or "PATENT",
+                            embedding=emb_m if isinstance(emb_m, list) else []
+                        )
+                        await p_doc.insert()
+
+            _loop = get_app_loop()
+            if _loop is not None and _loop.is_running():
+                asyncio.run_coroutine_threadsafe(_cache_mongo_patents(), _loop)
+            else:
+                try:
+                    asyncio.run(_cache_mongo_patents())
+                except Exception as e_ar:
+                    logger.debug(f"[PATENT API] asyncio.run cache note: {e_ar}")
+            logger.info(f"[PATENT API] Successfully cached {len(items_to_process)} records into MongoDB Atlas.")
+        except Exception as e_mc:
+            logger.debug(f"[PATENT API] MongoDB patent cache note: {e_mc}")
+
+        try:
+            total_db_patents = db.query(Patent).count()
+        except Exception:
+            total_db_patents = len(newly_cached_patents)
         final_patents_searched = lens_retrieved_count if (lens_retrieved_count and lens_retrieved_count > 0) else len(raw_candidates)
         live_patent_numbers = [item.get("patent_number", "").strip() for item in raw_candidates if item.get("source_status") == "LIVE_API" and item.get("patent_number", "").strip()]
 

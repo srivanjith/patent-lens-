@@ -22,9 +22,10 @@ class Settings(BaseSettings):
     TESTING: bool = False
     LIVE_BENCHMARK: bool = False
 
-    # Database
-    DATABASE_URL: str = "postgresql://postgres:femin12345@localhost:5432/Patentartpro"
-    MONGODB_URL: str = "mongodb://localhost:27017/patentlens"
+    # Database Configuration (MongoDB Atlas Primary, SQLite Local Fallback)
+    PRIMARY_DB: str = "mongodb"
+    DATABASE_URL: str = "sqlite:///patentlens.db"
+    MONGODB_URL: str = "mongodb+srv://femina6666fe_db_user:46Afbg6aVneIpXRi@cluster0.yi1ifja.mongodb.net/patentlens?retryWrites=true&w=majority&appName=Cluster0"
     MONGODB_DB_NAME: str = "patentlens"
 
     # JWT Security

@@ -19,6 +19,7 @@ def get_reports_dir() -> str:
             f.write("ok")
         os.remove(test_file)
         return primary_dir
+    # pyrefly: ignore[unreachable-except-clause]
     except (OSError, PermissionError):
         tmp_dir = os.path.join(tempfile.gettempdir(), "generated_reports")
         os.makedirs(tmp_dir, exist_ok=True)

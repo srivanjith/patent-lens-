@@ -212,6 +212,9 @@ class PipelineMetrics(BaseModel):
     api_requests_failed: int = 0
     api_records_returned: int = 0
     api_records_unique: int = 0
+    open_world_matched: int = 0
+    deduplicated_families: int = 0
+    rejected_irrelevant_candidates: int = 0
 
     # Vector & embedding metrics
     embedding_candidates: int = 0
@@ -362,6 +365,10 @@ class SearchSummary(BaseModel):
     patents_deeply_analyzed: Optional[int] = 0
     highest_semantic_similarity: Optional[float] = 0.0
     unique_families_count: Optional[int] = 0
+    open_world_matched: Optional[int] = 0
+    database_candidates_examined: Optional[int] = 0
+    deduplicated_families: Optional[int] = 0
+    rejected_irrelevant_candidates: Optional[int] = 0
     pipeline_metrics: Optional[PipelineMetrics] = None
     provider_status: Optional[ProviderStatus] = None
 

@@ -107,6 +107,10 @@ export interface PipelineMetrics {
   api_requests_failed?: number;
   api_records_returned?: number;
   api_records_unique?: number;
+  open_world_matched?: number;
+  deduplicated_families?: number;
+  rejected_irrelevant_candidates?: number;
+  candidates_evaluated?: number;
   embedding_candidates?: number;
   vector_candidates_evaluated?: number;
   vector_shortlisted_count?: number;
@@ -215,6 +219,10 @@ export interface SearchSummary {
   patents_deeply_analyzed?: number;
   highest_semantic_similarity?: number;
   unique_families_count?: number;
+  open_world_matched?: number;
+  database_candidates_examined?: number;
+  deduplicated_families?: number;
+  rejected_irrelevant_candidates?: number;
   pipeline_metrics?: PipelineMetrics;
   provider_status?: ProviderStatus;
 }

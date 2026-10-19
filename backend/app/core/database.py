@@ -21,9 +21,10 @@ def _get_masked_db_url(url: str) -> str:
     except Exception:
         return "postgresql://***:***@<masked-host>"
 
-IS_POSTGRES = settings.DATABASE_URL.startswith("postgresql")
+is_mongo_primary = getattr(settings, "PRIMARY_DB", "mongodb").lower() == "mongodb"
+IS_POSTGRES = settings.DATABASE_URL.startswith("postgresql") and not is_mongo_primary
 HAS_PGVECTOR = False
-ACTIVE_DB = "sqlite"  # updated below after successful connection
+ACTIVE_DB = "sqlite"
 
 is_production = (getattr(settings, "ENVIRONMENT", "development").lower() == "production" or os.getenv("ENVIRONMENT", "").lower() == "production")
 
@@ -32,11 +33,36 @@ if db_url and (db_url.startswith("postgresql://") or db_url.startswith("postgres
     if not any(x in db_url for x in ["+psycopg2", "+psycopg", "+asyncpg", "+pg8000"]):
         db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1).replace("postgres://", "postgresql+psycopg2://", 1)
 
-is_vercel = os.getenv("VERCEL") == "1" or os.getenv("NOW_REGION") is not None
-sqlite_dir = "/tmp" if (is_production or is_vercel) else "."
-SQLITE_URL = f"sqlite:///{os.path.normpath(os.path.join(sqlite_dir, 'patentlens.db'))}"
+import tempfile
 
-if IS_POSTGRES:
+is_vercel = os.getenv("VERCEL") == "1" or os.getenv("NOW_REGION") is not None
+
+def _get_sqlite_url() -> str:
+    """Return a guaranteed writable SQLite database path, falling back to tempdir in serverless/read-only runtimes."""
+    if is_production or is_vercel:
+        tmp_dir = tempfile.gettempdir()
+        safe_path = os.path.normpath(os.path.join(tmp_dir, "patentlens.db")).replace("\\", "/")
+        return f"sqlite:///{safe_path}" if safe_path.startswith("/") else f"sqlite:///{safe_path}"
+
+    test_file = os.path.join(".", ".write_test")
+    try:
+        with open(test_file, "w") as f:
+            f.write("ok")
+        os.remove(test_file)
+        return "sqlite:///./patentlens.db"
+    except Exception:
+        tmp_dir = tempfile.gettempdir()
+        safe_path = os.path.normpath(os.path.join(tmp_dir, "patentlens.db")).replace("\\", "/")
+        return f"sqlite:///{safe_path}" if safe_path.startswith("/") else f"sqlite:///{safe_path}"
+
+SQLITE_URL = _get_sqlite_url()
+
+if is_mongo_primary:
+    logger.info("🍃 Primary Database: MongoDB Atlas (Beanie Document ORM)")
+    logger.info("📦 Local Relational Store: SQLite")
+    engine = create_engine(SQLITE_URL, connect_args={"check_same_thread": False})
+    ACTIVE_DB = "sqlite_local"
+elif IS_POSTGRES:
     logger.info("Database backend: PostgreSQL (primary)")
     logger.info(f"Database host: {_get_masked_db_url(db_url)}")
     try:
@@ -74,7 +100,7 @@ else:
     )
     ACTIVE_DB = "sqlite"
 
-logger.info(f"[DB] Active relational database: {ACTIVE_DB}")
+logger.info(f"[DB] Primary Engine: {'MongoDB Atlas' if is_mongo_primary else ACTIVE_DB}")
 
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -200,7 +226,10 @@ async def init_mongo():
             document_models=[UserDoc, PatentDoc, SearchDoc, SavedPatentDoc, ReportDoc]
         )
         # Capture the running loop so sync threads can use run_coroutine_threadsafe
-        _app_event_loop = asyncio.get_event_loop()
+        try:
+            _app_event_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _app_event_loop = asyncio.get_event_loop()
         logger.info("MongoDB & Beanie Document ORM initialized successfully.")
     except Exception as e:
         logger.warning(f"MongoDB initialization note: {e}")

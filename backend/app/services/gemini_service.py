@@ -154,11 +154,15 @@ Return ONLY valid JSON matching this exact structure:
                         return client.models.generate_content(
                             model=self.model_name,
                             contents=f"{system_prompt}\n\n{user_prompt}",
-                            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.1)
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                temperature=0.1,
+                                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
+                            )
                         )
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                         fut = pool.submit(_call_sdk)
-                        res = fut.result(timeout=4.0)
+                        res = fut.result(timeout=12.0)
                     if res and res.text:
                         parsed = json.loads(res.text)
                         return self._clean_invention_analysis(parsed, title, keywords, domain)
@@ -169,7 +173,7 @@ Return ONLY valid JSON matching this exact structure:
                     "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]}],
                     "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
                 }
-                with httpx.Client(timeout=4.0) as http_client:
+                with httpx.Client(timeout=12.0) as http_client:
                     response = http_client.post(url, json=payload)
                     if response.status_code == 200:
                         text_content = response.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -457,12 +461,13 @@ Return ONLY valid JSON matching this exact structure:
                             contents=f"{system_prompt}\n\n{user_prompt}",
                             config=types.GenerateContentConfig(
                                 response_mime_type="application/json",
-                                temperature=0.1
+                                temperature=0.1,
+                                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
                             )
                         )
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                         fut = pool.submit(_call_pair_sdk)
-                        response = fut.result(timeout=3.0)
+                        response = fut.result(timeout=9.0)
                     if response and response.text:
                         parsed = json.loads(response.text)
                         parsed["ai_powered"] = True
@@ -475,7 +480,7 @@ Return ONLY valid JSON matching this exact structure:
                     "contents": [{"role": "user", "parts": [{"text": f"{system_prompt}\n\n{user_prompt}"}]}],
                     "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
                 }
-                with httpx.Client(timeout=3.0) as http_client:
+                with httpx.Client(timeout=9.0) as http_client:
                     res = http_client.post(url, json=payload)
                     if res.status_code == 200:
                         text_content = res.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -704,11 +709,15 @@ Return ONLY valid JSON.
                     return client.models.generate_content(
                         model=self.model_name,
                         contents=user_prompt,
-                        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2)
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.2,
+                            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
+                        )
                     )
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     fut = pool.submit(_call_novelty_sdk)
-                    res = fut.result(timeout=3.0)
+                    res = fut.result(timeout=10.0)
                 if res and res.text:
                     parsed = json.loads(res.text)
                     parsed["ai_powered"] = True
@@ -721,7 +730,7 @@ Return ONLY valid JSON.
                 "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                 "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}
             }
-            with httpx.Client(timeout=3.0) as http_client:
+            with httpx.Client(timeout=10.0) as http_client:
                 response = http_client.post(url, json=payload)
                 if response.status_code == 200:
                     text_content = response.json()["candidates"][0]["content"]["parts"][0]["text"]

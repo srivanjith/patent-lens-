@@ -94,19 +94,25 @@ async def register_user(request: UserRegisterRequest, response: Response, db: Se
             await user_doc.save()
 
         if existing is not None:
-            setattr(existing, "name", request.name.strip())
-            setattr(existing, "password_hash", new_pwd_hash)
-            setattr(existing, "otp_code", otp)
-            setattr(existing, "otp_expires_at", exp)
-            db.commit()
-            db.refresh(existing)
-            user_out = UserOut(
-                id=_get_str(existing.id),
-                name=_get_str(existing.name),
-                email=_get_str(existing.email),
-                is_verified=_get_bool(existing.is_verified),
-                created_at=_get_dt(existing.created_at)
-            )
+            try:
+                setattr(existing, "name", request.name.strip())
+                setattr(existing, "password_hash", new_pwd_hash)
+                setattr(existing, "otp_code", otp)
+                setattr(existing, "otp_expires_at", exp)
+                db.commit()
+                db.refresh(existing)
+                user_out = UserOut(
+                    id=_get_str(existing.id),
+                    name=_get_str(existing.name),
+                    email=_get_str(existing.email),
+                    is_verified=_get_bool(existing.is_verified),
+                    created_at=_get_dt(existing.created_at)
+                )
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
         elif user_doc is not None:
             user_out = UserOut(
                 id=_get_str(user_doc.id),
@@ -226,7 +232,13 @@ async def login_user(request: UserLoginRequest, response: Response, db: Session 
         if user_sql is not None:
             setattr(user_sql, "otp_code", otp)
             setattr(user_sql, "otp_expires_at", exp)
-            db.commit()
+            try:
+                db.commit()
+            except Exception:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
 
         return TokenResponse(
             require_otp=True,

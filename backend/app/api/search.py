@@ -22,6 +22,107 @@ from app.services.patent_api_service import patent_api_service
 from app.services.lens_api_service import lens_api_service
 router = APIRouter(prefix="/search", tags=["Prior-Art Search"])
 
+import re
+
+def _normalize_title_stem(title_str: str) -> str:
+    if not title_str:
+        return ""
+    t = re.sub(r'\s*-\s*Variant\s*\d+', '', title_str, flags=re.IGNORECASE)
+    t = re.sub(r'\s*-\s*Part\s*\d+', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\s*\((Continuation|Divisional|Reissue|Variant)\s*\d*\)', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'[^a-zA-Z0-9\s]', ' ', t).lower()
+    words = [w for w in t.split() if len(w) > 3]
+    return " ".join(words[:6])
+
+def _clean_assignee(assignee_str: str) -> str:
+    if not assignee_str:
+        return ""
+    a = re.sub(r'\b(INC|LTD|LLC|CORP|CORPORATION|GMBH|CO|COMPANY|AG|SAS|SA)\b', '', assignee_str, flags=re.IGNORECASE)
+    a = re.sub(r'[^a-zA-Z0-9]', '', a).lower()
+    return a[:12]
+
+def _get_fam_key(pat_obj: Any) -> str:
+    raw_title = getattr(pat_obj, "title", "") or ""
+    t_stem = _normalize_title_stem(raw_title)
+    if t_stem and len(t_stem) > 12:
+        return f"FAM_TITLE_{t_stem}"
+        
+    fam_id = getattr(pat_obj, "simple_family_id", None) or getattr(pat_obj, "family_id", None)
+    p_num = (getattr(pat_obj, "patent_number", "") or "").strip().upper()
+    clean_num = p_num.split("-")[-1] if "-" in p_num else p_num
+    clean_num = re.sub(r'[A-Z]\d?$', '', clean_num)
+    if fam_id and str(fam_id).strip() and str(fam_id).strip() != "None":
+        fam_str = str(fam_id).strip().upper()
+        if fam_str != clean_num and fam_str != p_num:
+            return f"FAM_{fam_str}"
+    return clean_num if clean_num else p_num
+
+def _deduplicate_result_items(items: List[SearchResultItem]) -> List[SearchResultItem]:
+    if not items:
+        return []
+    
+    from app.schemas.schemas import PatentFamilyMember
+    import re
+
+    family_grouped: Dict[str, SearchResultItem] = {}
+    family_members_collector: Dict[str, List[PatentFamilyMember]] = {}
+    
+    for item in items:
+        fam_key = _get_fam_key(item.patent)
+        if fam_key not in family_members_collector:
+            family_members_collector[fam_key] = []
+        
+        # Collect existing family members
+        if item.family_members:
+            for fm in item.family_members:
+                if not any(x.patent_number == fm.patent_number for x in family_members_collector[fam_key]):
+                    family_members_collector[fam_key].append(fm)
+                    
+        # Ensure item's own patent is represented
+        p_num = (item.patent.patent_number or "").strip()
+        if p_num and not any(x.patent_number == p_num for x in family_members_collector[fam_key]):
+            family_members_collector[fam_key].append(
+                PatentFamilyMember(
+                    patent_number=p_num,
+                    jurisdiction=getattr(item.patent, "jurisdiction", None) or "US",
+                    kind="B2" if bool(re.search(r'US-?\d{7,8}', p_num.upper())) and not bool(re.search(r'20\d{2}', p_num)) else "A1",
+                    title=item.patent.title or "",
+                    publication_date=getattr(item.patent, "publication_date", None) or "2024-01-01",
+                    document_type=getattr(item.patent, "document_type", "PATENT"),
+                    source_url=getattr(item.patent, "source_url", "") or ""
+                )
+            )
+
+        if fam_key not in family_grouped:
+            family_grouped[fam_key] = item
+        else:
+            prev = family_grouped[fam_key]
+            prev_num = (prev.patent.patent_number or "").upper()
+            curr_num = (item.patent.patent_number or "").upper()
+            is_curr_grant = bool(re.search(r'US-?\d{7,8}(?:[A-Z]\d?)?$', curr_num)) and not bool(re.search(r'US-?20\d{2}', curr_num))
+            is_prev_grant = bool(re.search(r'US-?\d{7,8}(?:[A-Z]\d?)?$', prev_num)) and not bool(re.search(r'US-?20\d{2}', prev_num))
+            
+            if is_curr_grant and not is_prev_grant:
+                family_grouped[fam_key] = item
+            elif is_prev_grant and not is_curr_grant:
+                pass  # Keep granted patent as primary card
+            elif (item.final_score or 0) > (prev.final_score or 0):
+                family_grouped[fam_key] = item
+
+    deduped = []
+    for fam_key, rep_item in family_grouped.items():
+        all_fams = family_members_collector.get(fam_key, [])
+        rep_item.family_members = all_fams
+        rep_item.family_size = max(len(all_fams), rep_item.family_size or 1, getattr(rep_item.patent, "simple_family_size", 1) or 1)
+        deduped.append(rep_item)
+
+    deduped.sort(key=lambda x: x.final_score or 0.0, reverse=True)
+    for idx, item in enumerate(deduped, start=1):
+        item.rank = idx
+
+    return deduped
+
+
 @router.post("", response_model=PriorArtSearchResponse, status_code=status.HTTP_201_CREATED)
 def perform_prior_art_search(
     request: PriorArtSearchRequest,
@@ -151,63 +252,81 @@ def perform_prior_art_search(
         else set()
     )
 
+    mongo_patents = []
+    try:
+        from app.models.models import PatentDoc
+        from app.core.database import get_app_loop
+        import asyncio
+
+        async def _fetch_mongo_candidates():
+            tasks = []
+            m_candidates = []
+            if live_retrieved_set:
+                tasks.append(PatentDoc.find({"patent_number": {"$in": list(live_retrieved_set)}}).to_list())
+            if request.domain:
+                tasks.append(PatentDoc.find(PatentDoc.domain == request.domain).limit(200).to_list())
+            for kw in (request.keywords or []):
+                kw_clean = kw.strip()
+                if len(kw_clean) >= 4:
+                    tasks.append(PatentDoc.find({"title": {"$regex": kw_clean, "$options": "i"}}).limit(30).to_list())
+                    if len(tasks) >= 6:
+                        break
+            tasks.append(PatentDoc.find().sort("-created_at").limit(250).to_list())
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, list):
+                    m_candidates.extend(r)
+            return m_candidates
+
+        _loop = get_app_loop()
+        if _loop is not None and _loop.is_running():
+            mongo_patents = asyncio.run_coroutine_threadsafe(_fetch_mongo_candidates(), _loop).result(timeout=8.0)
+        else:
+            try:
+                mongo_patents = asyncio.run(_fetch_mongo_candidates())
+            except Exception as e_ar:
+                logger.debug(f"asyncio.run candidate fetch note: {e_ar}")
+        logger.info(f"Retrieved {len(mongo_patents)} patent candidates from MongoDB Atlas (primary).")
+    except Exception as e_mfetch:
+        logger.warning(f"MongoDB patent fetch note: {e_mfetch}")
+
     live_patents = []
     domain_patents = []
     kw_patents = []
     recent_patents = []
     seed_patents = []
 
-    try:
-        # Priority 1: Exact live patents fetched for THIS request
-        if live_retrieved_set:
-            live_patents = db.query(Patent).filter(Patent.patent_number.in_(list(live_retrieved_set))).all()
-        else:
-            live_patents = db.query(Patent).filter(Patent.source_status == "LIVE_API").order_by(Patent.id.desc()).limit(100).all()
-
-        # Priority 2: Domain-relevant patents from Postgres (e.g. Agriculture for irrigation, Healthcare for wearables)
-        if request.domain:
-            domain_patents = db.query(Patent).filter(Patent.domain.ilike(f"%{request.domain}%")).limit(100).all()
-
-        # Priority 3: Keyword-matching patents from Postgres
-        for kw in (request.keywords or []):
-            kw_clean = kw.strip()
-            if len(kw_clean) >= 4:
-                matching_kws = db.query(Patent).filter(Patent.title.ilike(f"%{kw_clean}%")).limit(25).all()
-                kw_patents.extend(matching_kws)
-                if len(kw_patents) >= 60:
-                    break
-
-        # Priority 4: Recent and seed patents from Postgres
-        recent_patents = db.query(Patent).order_by(Patent.id.desc()).limit(100).all()
-        seed_patents = db.query(Patent).limit(50).all()
-    except Exception as e_db_fetch:
-        logger.warning(f"Database patent candidate query error: {e_db_fetch}")
+    if db:
         try:
-            db.rollback()
-            seed_patents = db.query(Patent).limit(100).all()
-        except Exception:
-            seed_patents = []
+            if live_retrieved_set:
+                live_patents = db.query(Patent).filter(Patent.patent_number.in_(list(live_retrieved_set))).all()
+            else:
+                live_patents = db.query(Patent).filter(Patent.source_status == "LIVE_API").order_by(Patent.id.desc()).limit(100).all()
 
-    mongo_patents = []
-    try:
-        from app.models.models import PatentDoc
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            mongo_patents = loop.run_until_complete(PatentDoc.find().limit(300).to_list())
-        except Exception:
-            mongo_patents = asyncio.run(PatentDoc.find().limit(300).to_list())
-    except Exception as e_mfetch:
-        logger.warning(f"MongoDB patent fetch note: {e_mfetch}")
+            if request.domain:
+                domain_patents = db.query(Patent).filter(Patent.domain.ilike(f"%{request.domain}%")).limit(100).all()
+
+            for kw in (request.keywords or []):
+                kw_clean = kw.strip()
+                if len(kw_clean) >= 4:
+                    matching_kws = db.query(Patent).filter(Patent.title.ilike(f"%{kw_clean}%")).limit(25).all()
+                    kw_patents.extend(matching_kws)
+                    if len(kw_patents) >= 60:
+                        break
+
+            recent_patents = db.query(Patent).order_by(Patent.id.desc()).limit(100).all()
+            seed_patents = db.query(Patent).limit(50).all()
+        except Exception as e_db_fetch:
+            logger.debug(f"SQL cache patent query note: {e_db_fetch}")
 
     patent_map = {}
-    for p in (live_patents + domain_patents + kw_patents + recent_patents + seed_patents):
-        if p and p.patent_number:
-            patent_map[p.patent_number] = p
-
     for mp in mongo_patents:
         if mp and mp.patent_number and mp.patent_number not in patent_map:
             patent_map[mp.patent_number] = mp
+
+    for p in (live_patents + domain_patents + kw_patents + recent_patents + seed_patents):
+        if p and p.patent_number and p.patent_number not in patent_map:
+            patent_map[p.patent_number] = p
 
     all_patents = list(patent_map.values())
 
@@ -325,49 +444,38 @@ def perform_prior_art_search(
             "scores": scores
         })
 
-    # Robust generalized patent family deduplication & metric tracking
-    import re
-    def _normalize_title_stem(title_str: str) -> str:
-        if not title_str:
-            return ""
-        t = re.sub(r'\s*-\s*Variant\s*\d+', '', title_str, flags=re.IGNORECASE)
-        t = re.sub(r'\s*-\s*Part\s*\d+', '', t, flags=re.IGNORECASE)
-        t = re.sub(r'\s*\((Continuation|Divisional|Reissue|Variant)\s*\d*\)', '', t, flags=re.IGNORECASE)
-        t = re.sub(r'[^a-zA-Z0-9\s]', ' ', t).lower()
-        words = [w for w in t.split() if len(w) > 3]
-        return " ".join(words[:6])
-
-    def _get_fam_key(pat_obj: Any) -> str:
-        fam_id = getattr(pat_obj, "simple_family_id", None) or getattr(pat_obj, "family_id", None)
-        if fam_id and str(fam_id).strip() and str(fam_id).strip() != "None":
-            return f"FAM_{str(fam_id).strip().upper()}"
-        
-        t_stem = _normalize_title_stem(getattr(pat_obj, "title", ""))
-        if t_stem and len(t_stem) > 10:
-            return f"TITLE_{t_stem}"
-            
-        p_num = (pat_obj.patent_number or "").strip().upper()
-        clean = p_num.split("-")[-1] if "-" in p_num else p_num
-        clean = re.sub(r'[A-Z]\d?$', '', clean)
-        return clean if clean else p_num
-
     candidates_with_family_ids_cnt = sum(
         1 for item in scored_items
         if (getattr(item["patent"], "simple_family_id", None) or getattr(item["patent"], "family_id", None))
     )
 
     family_grouped: Dict[str, Any] = {}
+    family_members_map: Dict[str, List[Any]] = {}
     for item in scored_items:
         fam_key = _get_fam_key(item["patent"])
+        if fam_key not in family_members_map:
+            family_members_map[fam_key] = []
+        family_members_map[fam_key].append(item["patent"])
 
         if fam_key not in family_grouped:
             family_grouped[fam_key] = item
         else:
             prev = family_grouped[fam_key]
-            prev_claims_len = len(prev["patent"].claims or "")
-            curr_claims_len = len(item["patent"].claims or "")
-            if item["scores"]["final_score"] > prev["scores"]["final_score"] or (item["scores"]["final_score"] == prev["scores"]["final_score"] and curr_claims_len > prev_claims_len):
+            prev_num = (prev["patent"].patent_number or "").upper()
+            curr_num = (item["patent"].patent_number or "").upper()
+            is_curr_grant = bool(re.search(r'US-?\d{7,8}(?:[A-Z]\d?)?$', curr_num)) and not bool(re.search(r'US-?20\d{2}', curr_num))
+            is_prev_grant = bool(re.search(r'US-?\d{7,8}(?:[A-Z]\d?)?$', prev_num)) and not bool(re.search(r'US-?20\d{2}', prev_num))
+            if is_curr_grant and not is_prev_grant:
                 family_grouped[fam_key] = item
+            elif is_prev_grant and not is_curr_grant:
+                pass  # Keep granted patent as primary representative
+            elif item["scores"]["final_score"] > prev["scores"]["final_score"]:
+                family_grouped[fam_key] = item
+            elif item["scores"]["final_score"] == prev["scores"]["final_score"]:
+                prev_claims_len = len(prev["patent"].claims or "")
+                curr_claims_len = len(item["patent"].claims or "")
+                if curr_claims_len > prev_claims_len:
+                    family_grouped[fam_key] = item
 
     # Stage 4 Technical Relevance Gate (Non-forced Top N): Reject candidates with score < 30% and 0 feature matches
     deduped_scored_items = list(family_grouped.values())
@@ -547,7 +655,7 @@ def perform_prior_art_search(
     pair_analysis_map = {}
     if top_10:
         pair_timeout = 8.0 if llm_service.is_configured else 1.0
-        with ThreadPoolExecutor(max_workers=min(2, len(top_10))) as pool:
+        with ThreadPoolExecutor(max_workers=min(5, len(top_10))) as pool:
 
             futures = [pool.submit(_execute_pair_analysis, item_tuple) for item_tuple in enumerate(top_10, start=1)]
             for fut in futures:
@@ -621,6 +729,9 @@ def perform_prior_art_search(
         api_requests_failed=int(api_stats.get("api_requests_failed", 0) or 0),
         api_records_returned=int(api_stats.get("api_records_returned", pat_retrieved) or 0),
         api_records_unique=int(api_stats.get("api_records_unique", pat_retrieved) or 0),
+        open_world_matched=lens_total_searched,
+        deduplicated_families=len(family_grouped),
+        rejected_irrelevant_candidates=rejected_count,
         embedding_candidates=embedding_candidates,
         vector_candidates_evaluated=vector_candidates_evaluated,
         vector_shortlisted_count=vector_shortlisted_count,
@@ -911,16 +1022,17 @@ def perform_prior_art_search(
             score_breakdown=score_bd_obj,
             family_members=[
                 PatentFamilyMember(
-                    patent_number=pat.patent_number,
-                    jurisdiction=pat.jurisdiction or "US",
-                    kind="A1",
-                    title=pat.title,
-                    publication_date=pat.publication_date,
-                    document_type=doc_type_val,
-                    source_url=pat.source_url or ""
+                    patent_number=f_doc.patent_number,
+                    jurisdiction=getattr(f_doc, "jurisdiction", None) or "US",
+                    kind="B2" if bool(re.search(r'US-?\d{7,8}', (f_doc.patent_number or "").upper())) and not bool(re.search(r'20\d{2}', (f_doc.patent_number or ""))) else "A1",
+                    title=f_doc.title or "",
+                    publication_date=getattr(f_doc, "publication_date", None) or "2024-01-01",
+                    document_type="PATENT" if (not getattr(f_doc, "document_type", None) or f_doc.document_type in ["PATENT", "DATABASE RECORD"]) else f_doc.document_type,
+                    source_url=getattr(f_doc, "source_url", "") or ""
                 )
+                for f_doc in family_members_map.get(_get_fam_key(pat), [pat])
             ],
-            family_size=getattr(pat, "simple_family_size", 1) or 1,
+            family_size=max(len(family_members_map.get(_get_fam_key(pat), [pat])), getattr(pat, "simple_family_size", 1) or 1),
             is_family_representative=True,
             family_id=getattr(pat, "simple_family_id", pat.patent_number) or pat.patent_number,
             temporal_status=temporal_status,
@@ -1053,6 +1165,10 @@ def perform_prior_art_search(
         patents_deeply_analyzed=pat_deeply_analyzed,
         highest_semantic_similarity=highest_semantic_similarity,
         unique_families_count=len(family_grouped),
+        open_world_matched=lens_total_searched,
+        database_candidates_examined=database_candidates_examined,
+        deduplicated_families=len(family_grouped),
+        rejected_irrelevant_candidates=rejected_count,
         pipeline_metrics=pipeline_metrics,
         provider_status=provider_status_obj
     )
@@ -1118,39 +1234,14 @@ def perform_prior_art_search(
     )
 
 @router.get("/history", response_model=List[SearchHistoryItem])
-def get_user_search_history(
+async def get_user_search_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Retrieve search history for the authenticated user."""
-    searches = []
-    try:
-        searches = (
-            db.query(Search)
-            .filter(Search.user_id == current_user.id)
-            .order_by(Search.created_at.desc())
-            .all()
-        )
-    except Exception:
-        pass
-
-    if searches:
-        return [SearchHistoryItem.model_validate(s) for s in searches]
-
-    # Fallback to MongoDB SearchDoc
+    """Retrieve search history for the authenticated user, querying MongoDB Atlas first."""
     try:
         from app.models.models import SearchDoc
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            mongo_searches = loop.run_until_complete(
-                SearchDoc.find(SearchDoc.user_id == current_user.id).sort("-created_at").to_list()
-            )
-        except Exception:
-            mongo_searches = asyncio.run(
-                SearchDoc.find(SearchDoc.user_id == current_user.id).sort("-created_at").to_list()
-            )
-
+        mongo_searches = await SearchDoc.find(SearchDoc.user_id == str(current_user.id)).sort("-created_at").to_list()
         if mongo_searches:
             history_list = []
             for ms in mongo_searches:
@@ -1166,8 +1257,22 @@ def get_user_search_history(
                     )
                 )
             return history_list
-    except Exception:
-        pass
+    except Exception as e_mh:
+        import logging
+        logging.getLogger("patentlens.search").debug(f"MongoDB search history note: {e_mh}")
+
+    if db:
+        try:
+            searches = (
+                db.query(Search)
+                .filter(Search.user_id == current_user.id)
+                .order_by(Search.created_at.desc())
+                .all()
+            )
+            if searches:
+                return [SearchHistoryItem.model_validate(s) for s in searches]
+        except Exception:
+            pass
 
     return []
 
@@ -1203,6 +1308,8 @@ async def get_search_details(
                         except Exception:
                             pass
 
+                res_items = _deduplicate_result_items(res_items)
+
                 risk_info = classify_prior_art_risk(mongo_s.highest_similarity)
                 pipe_metrics_obj = None
                 if mongo_s.pipeline_metrics:
@@ -1218,6 +1325,10 @@ async def get_search_details(
                     moderate_similarity=mongo_s.moderate_similarity,
                     low_similarity=mongo_s.low_similarity,
                     very_high_similarity=mongo_s.very_high_similarity,
+                    open_world_matched=getattr(pipe_metrics_obj, "open_world_matched", 0) or mongo_s.total_results,
+                    database_candidates_examined=getattr(pipe_metrics_obj, "database_candidates_examined", 0),
+                    deduplicated_families=getattr(pipe_metrics_obj, "deduplicated_families", 0) or getattr(pipe_metrics_obj, "unique_families", 0),
+                    rejected_irrelevant_candidates=getattr(pipe_metrics_obj, "rejected_irrelevant_candidates", 0),
                     patents_searched=pipe_metrics_obj.patents_searched_total if (pipe_metrics_obj and pipe_metrics_obj.patents_searched_total) else (pipe_metrics_obj.patents_searched if pipe_metrics_obj else mongo_s.patents_searched),
                     patents_retrieved=pipe_metrics_obj.api_records_returned if (pipe_metrics_obj and pipe_metrics_obj.api_records_returned is not None) else (pipe_metrics_obj.patents_retrieved if pipe_metrics_obj else mongo_s.patents_retrieved),
                     patents_shortlisted=pipe_metrics_obj.vector_shortlisted_count if (pipe_metrics_obj and pipe_metrics_obj.vector_shortlisted_count) else (pipe_metrics_obj.vector_shortlisted if pipe_metrics_obj else mongo_s.patents_shortlisted),
@@ -1365,6 +1476,8 @@ async def get_search_details(
             )
         )
 
+    result_items = _deduplicate_result_items(result_items)
+
     risk_info = classify_prior_art_risk(search.highest_similarity)
     highest_semantic = max((r.semantic_score for r in result_items), default=0.0)
 
@@ -1391,6 +1504,10 @@ async def get_search_details(
         moderate_similarity=mod_val,
         low_similarity=low_val,
         very_high_similarity=vhigh_val,
+        open_world_matched=getattr(pipe_metrics_obj, "open_world_matched", 0) or int(search.total_results or 0),
+        database_candidates_examined=getattr(pipe_metrics_obj, "database_candidates_examined", 0),
+        deduplicated_families=getattr(pipe_metrics_obj, "deduplicated_families", 0) or getattr(pipe_metrics_obj, "unique_families", 0),
+        rejected_irrelevant_candidates=getattr(pipe_metrics_obj, "rejected_irrelevant_candidates", 0),
         patents_searched=pipe_metrics_obj.patents_searched_total if (pipe_metrics_obj and pipe_metrics_obj.patents_searched_total) else int(search.patents_searched or tot_val),
         patents_retrieved=pipe_metrics_obj.api_records_returned if (pipe_metrics_obj and pipe_metrics_obj.api_records_returned is not None) else int(search.patents_retrieved or 0),
         patents_shortlisted=pipe_metrics_obj.vector_shortlisted_count if (pipe_metrics_obj and pipe_metrics_obj.vector_shortlisted_count) else int(search.patents_shortlisted or tot_val),

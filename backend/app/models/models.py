@@ -17,7 +17,7 @@ VECTOR_TYPE = JSON
 class UserDoc(Document):
     model_config = ConfigDict(populate_by_name=True)
 
-    id: Any = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
     name: str
     email: Annotated[str, Indexed(unique=True)]
     password_hash: str
@@ -34,7 +34,7 @@ class UserDoc(Document):
 class PatentDoc(Document):
     model_config = ConfigDict(populate_by_name=True)
 
-    id: Any = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
     patent_number: Annotated[str, Indexed(unique=True)]
     title: str
     abstract: str
@@ -67,20 +67,21 @@ class PatentDoc(Document):
 
 class SearchResultItem(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    patent_id: str
-    semantic_score: float
-    keyword_score: float
-    domain_score: float
-    final_score: float
+    patent_id: Optional[str] = None
+    semantic_score: float = 0.0
+    keyword_score: float = 0.0
+    domain_score: float = 0.0
+    final_score: float = 0.0
     matched_concepts: List[str] = Field(default_factory=list)
-    rank: int
+    rank: int = 1
     analysis_payload: Optional[Dict[str, Any]] = None
+
 
 
 class SearchDoc(Document):
     model_config = ConfigDict(populate_by_name=True)
 
-    id: Any = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
     user_id: str
     invention_title: str
     domain: str
@@ -109,7 +110,7 @@ class SearchDoc(Document):
 class SavedPatentDoc(Document):
     model_config = ConfigDict(populate_by_name=True)
 
-    id: Any = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
     user_id: str
     patent_id: str
     notes: Optional[str] = None
@@ -122,7 +123,7 @@ class SavedPatentDoc(Document):
 class ReportDoc(Document):
     model_config = ConfigDict(populate_by_name=True)
 
-    id: Any = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
     user_id: str
     search_id: str
     report_path: str

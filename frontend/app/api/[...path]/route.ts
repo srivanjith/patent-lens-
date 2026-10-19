@@ -459,7 +459,7 @@ async function handleRequest(req: NextRequest, { params }: { params: Promise<{ p
       const body = req.method !== "GET" && req.method !== "HEAD" ? await req.text() : undefined;
 
       const isSearchEndpoint = cleanSubPath.includes("search");
-      const proxyTimeoutMs = isSearchEndpoint ? 60000 : 15000;
+      const proxyTimeoutMs = isSearchEndpoint ? 120000 : 20000;
 
       const res = await fetch(targetUrl, {
         method: req.method,

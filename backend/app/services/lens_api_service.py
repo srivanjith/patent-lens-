@@ -444,7 +444,7 @@ class LensAPIService:
 
             has_claim_flag = bool(lens_has_claims is True or (claims_str and len(claims_str.strip()) > 15))
             has_desc_flag = bool(lens_has_desc is True or (desc_str and len(desc_str.strip()) > 30))
-            has_full_text_flag = bool(lens_has_full is True or (has_claim_flag and has_desc_flag))
+            has_full_text_flag = (lens_has_full is True or (has_claim_flag and has_desc_flag))
             has_abstract_flag = bool(abs_str and len(abs_str.strip()) > 10)
 
             if not has_claim_flag:
