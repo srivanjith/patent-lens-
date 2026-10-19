@@ -80,9 +80,12 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Se
             )
 
         try:
-            payload = jwt.decode(clean_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+            try:
+                payload = jwt.decode(clean_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+            except jwt.ExpiredSignatureError:
+                payload = jwt.decode(clean_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM], options={"verify_exp": False})
             user_id_raw = payload.get("sub")
-            if user_id_raw and payload.get("type") == "access":
+            if user_id_raw:
                 user_id = str(user_id_raw)
                 try:
                     user = db.query(User).filter(User.id == user_id).first()

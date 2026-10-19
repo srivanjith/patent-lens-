@@ -83,6 +83,7 @@ class SearchDoc(Document):
 
     id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
     user_id: str
+    user_email: Optional[str] = None
     invention_title: str
     domain: str
     problem_statement: str
@@ -112,6 +113,7 @@ class SavedPatentDoc(Document):
 
     id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
     user_id: str
+    user_email: Optional[str] = None
     patent_id: str
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -125,6 +127,7 @@ class ReportDoc(Document):
 
     id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()))  # type: ignore[override]
     user_id: str
+    user_email: Optional[str] = None
     search_id: str
     report_path: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

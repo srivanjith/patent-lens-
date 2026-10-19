@@ -102,7 +102,7 @@ class LensAPIService:
 
         from concurrent.futures import ThreadPoolExecutor
 
-        target_queries = [q.strip() for q in queries if q and q.strip()][:8]
+        target_queries = [q.strip() for q in queries if q and q.strip()][:3]
         if not target_queries:
             return {
                 "results": [],

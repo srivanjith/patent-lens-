@@ -33,19 +33,19 @@ class Settings(BaseSettings):
     JWT_REFRESH_SECRET: str = "patentlens_super_secret_refresh_key_2026_change_in_production"
 
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 30  # 30 days
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # CORS & Frontend
     FRONTEND_URL: str = "http://localhost:3000"
 
     # Machine Learning & AI Services
-    LLM_PROVIDER: str = "gemini"
+    LLM_PROVIDER: str = "groq"
     MODEL_NAME: str = "all-MiniLM-L6-v2"
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama3-8b-8192"
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
 
 
     # External Patent APIs Configuration
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     LENS_API_URL: str = "https://api.lens.org/patent/search"
     LENS_HTTP_TIMEOUT: float = 20.0
     LENS_THREAD_TIMEOUT: float = 22.0
-    EXTERNAL_API_PIPELINE_TIMEOUT: float = 35.0
+    EXTERNAL_API_PIPELINE_TIMEOUT: float = 45.0
 
     # Configurable Similarity Thresholds (0-29% Low, 30-49% Moderate, 50-69% High, 70-100% Very High)
     SIMILARITY_THRESHOLD_LOW: float = 30.0

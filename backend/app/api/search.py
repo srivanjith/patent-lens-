@@ -1,3 +1,4 @@
+import os
 import json
 from app.schemas.schemas import ComponentBreakdownItem
 from typing import List, Dict, Any, Optional
@@ -124,7 +125,7 @@ def _deduplicate_result_items(items: List[SearchResultItem]) -> List[SearchResul
 
 
 @router.post("", response_model=PriorArtSearchResponse, status_code=status.HTTP_201_CREATED)
-def perform_prior_art_search(
+async def perform_prior_art_search(
     request: PriorArtSearchRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -220,7 +221,7 @@ def perform_prior_art_search(
             finally:
                 thread_db.close()
 
-        pipeline_timeout = getattr(settings, "EXTERNAL_API_PIPELINE_TIMEOUT", 25.0)
+        pipeline_timeout = getattr(settings, "EXTERNAL_API_PIPELINE_TIMEOUT", 45.0)
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ext_pool:
             ext_fut = ext_pool.submit(_do_external_fetch)
             api_stats = ext_fut.result(timeout=pipeline_timeout)
@@ -278,14 +279,7 @@ def perform_prior_art_search(
                     m_candidates.extend(r)
             return m_candidates
 
-        _loop = get_app_loop()
-        if _loop is not None and _loop.is_running():
-            mongo_patents = asyncio.run_coroutine_threadsafe(_fetch_mongo_candidates(), _loop).result(timeout=8.0)
-        else:
-            try:
-                mongo_patents = asyncio.run(_fetch_mongo_candidates())
-            except Exception as e_ar:
-                logger.debug(f"asyncio.run candidate fetch note: {e_ar}")
+        mongo_patents = await _fetch_mongo_candidates()
         logger.info(f"Retrieved {len(mongo_patents)} patent candidates from MongoDB Atlas (primary).")
     except Exception as e_mfetch:
         logger.warning(f"MongoDB patent fetch note: {e_mfetch}")
@@ -682,6 +676,20 @@ def perform_prior_art_search(
         s_obj = item_obj["scores"]
         prov_used = "heuristic"
         is_success = False
+        # Reserve full LLM pairwise claim analysis for top 3 candidates to stay comfortably under Groq 8000 TPM limit
+        if i_idx > 3:
+            res_analysis = llm_service._normalize_parsed_response(
+                llm_service._generate_heuristic_pair_analysis(
+                    target_title=request.title,
+                    target_description=request.description,
+                    patent_number=p_obj.patent_number,
+                    patent_title=p_obj.title,
+                    patent_abstract=p_obj.abstract,
+                    similarity_score=s_obj["final_score"],
+                    patent_description=p_obj.description
+                )
+            )
+            return i_idx, res_analysis, "heuristic", False
         try:
             res_analysis = llm_service.analyze_patent_pair(
                 target_title=request.title,
@@ -715,12 +723,12 @@ def perform_prior_art_search(
     pair_analysis_map = {}
     if top_10:
         pair_timeout = 8.0 if llm_service.is_configured else 1.0
-        with ThreadPoolExecutor(max_workers=min(5, len(top_10))) as pool:
+        with ThreadPoolExecutor(max_workers=min(3, len(top_10))) as pool:
 
             futures = [pool.submit(_execute_pair_analysis, item_tuple) for item_tuple in enumerate(top_10, start=1)]
             for fut in futures:
                 try:
-                    i_idx, res_analysis, prov_used, is_success = fut.result()                   
+                    i_idx, res_analysis, prov_used, is_success = fut.result(timeout=pair_timeout)                   
                     pair_analysis_map[i_idx] = res_analysis
                     if configured_provider == "groq":
                         groq_requests_attempted += 1
@@ -992,7 +1000,18 @@ def perform_prior_art_search(
 
         # Per-candidate Provenance Determination
         pat_num_str = (pat.patent_number or "").strip()
-        if pat_num_str in live_retrieved_set or (pat.source_status == "LIVE_API" and (pat.source_type or "").upper() == "THE LENS" and pat_retrieved > 0):
+        is_arxiv = (
+            (pat.source_type and "ARXIV" in pat.source_type.upper())
+            or pat_num_str.upper().startswith("ARXIV")
+            or (pat.document_type and "NON-PATENT" in pat.document_type.upper())
+        )
+        if is_arxiv:
+            item_source_status = "LIVE_API"
+            item_source_name = "arXiv Open Feed"
+            item_source_type = "arXiv"
+            item_retrieval_status = "LIVE_API_SUCCESS"
+            doc_type_val = "NON-PATENT LITERATURE"
+        elif (pat_num_str in live_retrieved_set and pat_retrieved > 0) or (pat.source_status == "LIVE_API" and (pat.source_type or "").upper() == "THE LENS"):
             item_source_status = "LIVE_API"
             item_source_name = "The Lens Patent API"
             item_source_type = "THE LENS"
@@ -1004,12 +1023,6 @@ def perform_prior_art_search(
             item_source_type = pat.source_type or "USPTO"
             item_retrieval_status = "FALLBACK_SUCCESS"
             doc_type_val = pat.document_type or "PATENT"
-        elif (pat.source_type and "ARXIV" in pat.source_type.upper()) or pat_num_str.startswith("ARXIV"):
-            item_source_status = "LIVE_API"
-            item_source_name = "arXiv Open Feed"
-            item_source_type = "arXiv"
-            item_retrieval_status = "LIVE_API_SUCCESS"
-            doc_type_val = "NON-PATENT LITERATURE"
         else:
             item_source_status = "DATABASE"
             item_source_name = "Database Repository"
@@ -1173,9 +1186,13 @@ def perform_prior_art_search(
             except Exception:
                 pass
 
+        user_email_str = str(getattr(current_user, "email", "") or "").strip().lower()
+        user_id_str = str(current_user.id)
+
         s_doc = SearchDoc(
             id=str(search_record.id),
-            user_id=str(current_user.id),
+            user_id=user_id_str,
+            user_email=user_email_str,
             invention_title=request.title,
             domain=request.domain,
             problem_statement=request.problem_statement,
@@ -1195,20 +1212,42 @@ def perform_prior_art_search(
             pipeline_metrics=pipeline_metrics.model_dump(mode="json"),
             results=mongo_sris
         )
+        await s_doc.insert()
+        logger.info(f"✅ Successfully persisted SearchDoc '{search_record.id}' to MongoDB Atlas for {user_email_str or user_id_str}!")
+
+        # Upsert candidates into MongoDB PatentDoc so save/detail operations are guaranteed to find them
         try:
-            from app.core.database import get_app_loop
-            import asyncio
-            _loop = get_app_loop()
-            if _loop is not None and _loop.is_running():
-                # Correct way to call async Beanie code from a sync thread-pool route
-                asyncio.run_coroutine_threadsafe(s_doc.insert(), _loop).result(timeout=5.0)
-            else:
-                # Fallback: no app loop yet (unit tests / CLI)
-                asyncio.run(s_doc.insert())
-        except Exception as e_insert:
-            logger.warning(f"MongoDB SearchDoc insert note: {e_insert}")
-            raise  # re-raise so the outer except catches it
-        logger.info(f"✅ Successfully persisted SearchDoc '{search_record.id}' to MongoDB Atlas!")
+            from app.models.models import PatentDoc
+            import uuid
+            for item in top_10:
+                p_cand = item.get("patent")
+                if not p_cand:
+                    continue
+                p_num = getattr(p_cand, "patent_number", None)
+                if not p_num:
+                    continue
+                existing_p = await PatentDoc.find_one(PatentDoc.patent_number == p_num)
+                if not existing_p:
+                    p_doc_new = PatentDoc(
+                        id=str(getattr(p_cand, "id", None) or uuid.uuid4()),
+                        patent_number=p_num,
+                        title=getattr(p_cand, "title", "Patent Record") or "Patent Record",
+                        abstract=getattr(p_cand, "abstract", "") or "",
+                        description=getattr(p_cand, "description", "") or "",
+                        claims=getattr(p_cand, "claims", None),
+                        inventors=getattr(p_cand, "inventors", "Unknown") or "Unknown",
+                        assignee=getattr(p_cand, "assignee", "Independent") or "Independent",
+                        publication_date=getattr(p_cand, "publication_date", "2024-01-01") or "2024-01-01",
+                        domain=getattr(p_cand, "domain", request.domain) or request.domain,
+                        source_url=getattr(p_cand, "source_url", None),
+                        source_type=getattr(p_cand, "source_type", "LIVE_API") or "LIVE_API",
+                        source_status=getattr(p_cand, "source_status", "LIVE_API") or "LIVE_API",
+                        document_type=getattr(p_cand, "document_type", "PATENT") or "PATENT",
+                        jurisdiction=getattr(p_cand, "jurisdiction", "US") or "US",
+                    )
+                    await p_doc_new.insert()
+        except Exception as e_p_upsert:
+            logger.debug(f"Candidate PatentDoc upsert note: {e_p_upsert}")
     except Exception as e_mongo_save:
         logger.warning(f"MongoDB SearchDoc save note: {e_mongo_save}")
 
@@ -1299,9 +1338,17 @@ async def get_user_search_history(
     db: Session = Depends(get_db)
 ):
     """Retrieve search history for the authenticated user, querying MongoDB Atlas first."""
+    user_email = str(getattr(current_user, "email", "") or "").strip().lower()
+    user_id = str(current_user.id)
+
     try:
         from app.models.models import SearchDoc
-        mongo_searches = await SearchDoc.find(SearchDoc.user_id == str(current_user.id)).sort("-created_at").to_list()
+        query_conditions = [{"user_id": user_id}]
+        if user_email:
+            query_conditions.append({"user_email": user_email})
+            query_conditions.append({"user_id": user_email})
+
+        mongo_searches = await SearchDoc.find({"$or": query_conditions}).sort("-created_at").to_list()
         if mongo_searches:
             history_list = []
             for ms in mongo_searches:
@@ -1325,7 +1372,7 @@ async def get_user_search_history(
         try:
             searches = (
                 db.query(Search)
-                .filter(Search.user_id == current_user.id)
+                .filter((Search.user_id == user_id) | (Search.user_id == user_email))
                 .order_by(Search.created_at.desc())
                 .all()
             )
@@ -1474,7 +1521,18 @@ async def get_search_details(
 
         pat_obj = r.patent
         pat_num_str = (pat_obj.patent_number or "").strip()
-        if (search.patents_retrieved or 0) > 0 and pat_obj.source_status == "LIVE_API" and (pat_obj.source_type or "").upper() == "THE LENS":
+        is_arxiv = (
+            (pat_obj.source_type and "ARXIV" in pat_obj.source_type.upper())
+            or pat_num_str.upper().startswith("ARXIV")
+            or (pat_obj.document_type and "NON-PATENT" in pat_obj.document_type.upper())
+        )
+        if is_arxiv:
+            item_src_status = "LIVE_API"
+            item_src_name = "arXiv Open Feed"
+            item_src_type = "arXiv"
+            item_ret_status = "LIVE_API_SUCCESS"
+            doc_type_val = "NON-PATENT LITERATURE"
+        elif (search.patents_retrieved or 0) > 0 and pat_obj.source_status == "LIVE_API" and (pat_obj.source_type or "").upper() == "THE LENS":
             item_src_status = "LIVE_API"
             item_src_name = "The Lens Patent API"
             item_src_type = "THE LENS"
@@ -1486,12 +1544,6 @@ async def get_search_details(
             item_src_type = pat_obj.source_type or "USPTO"
             item_ret_status = "FALLBACK_SUCCESS"
             doc_type_val = pat_obj.document_type or "PATENT"
-        elif (pat_obj.source_type and "ARXIV" in pat_obj.source_type.upper()) or pat_num_str.startswith("ARXIV"):
-            item_src_status = "LIVE_API"
-            item_src_name = "arXiv Open Feed"
-            item_src_type = "arXiv"
-            item_ret_status = "LIVE_API_SUCCESS"
-            doc_type_val = "NON-PATENT LITERATURE"
         else:
             item_src_status = "DATABASE"
             item_src_name = "Database Repository"

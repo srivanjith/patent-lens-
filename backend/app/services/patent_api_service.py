@@ -280,7 +280,14 @@ class PatentAPIService:
         except Exception:
             total_db_patents = len(newly_cached_patents)
         final_patents_searched = lens_retrieved_count if (lens_retrieved_count and lens_retrieved_count > 0) else len(raw_candidates)
-        live_patent_numbers = [item.get("patent_number", "").strip() for item in raw_candidates if item.get("source_status") == "LIVE_API" and item.get("patent_number", "").strip()]
+        live_patent_numbers = [
+            item.get("patent_number", "").strip()
+            for item in raw_candidates
+            if item.get("source_status") == "LIVE_API"
+            and not item.get("patent_number", "").strip().upper().startswith("ARXIV")
+            and (item.get("source_type") or "").upper() != "ARXIV"
+            and item.get("patent_number", "").strip()
+        ]
 
         return {
             "patents_retrieved": lens_retrieved_count if lens_api_service.is_configured else 0,

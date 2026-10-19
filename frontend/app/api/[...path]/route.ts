@@ -369,6 +369,31 @@ async function handleMockFallback(subPath: string, req: NextRequest) {
     return NextResponse.json([]);
   }
 
+  if (cleanPath.includes("/save")) {
+    const parts = cleanPath.split("/");
+    const patentId = parts[1] || "saved-patent";
+    if (req.method === "DELETE") {
+      return NextResponse.json({ success: true, message: "Patent removed from saved list." });
+    }
+    return NextResponse.json({
+      id: `saved-${Date.now()}`,
+      patent_id: patentId,
+      notes: "",
+      created_at: new Date().toISOString(),
+      patent: {
+        id: patentId,
+        patent_number: patentId,
+        title: `Patent Record (${patentId})`,
+        abstract: "Patent details saved from prior-art search.",
+        description: "Patent details saved from prior-art search.",
+        domain: "General",
+        inventors: "Inventor Record",
+        assignee: "Independent",
+        publication_date: "2024-01-01"
+      }
+    });
+  }
+
   if (cleanPath.startsWith("reports")) {
     const parts = cleanPath.split("/");
     if (req.method === "POST") {

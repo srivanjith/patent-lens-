@@ -167,12 +167,17 @@ export default function PatentCard({ item, onSavedToggle, isInitialSaved = false
             let displaySource = "DATABASE";
             let defaultDocType = rawStatus === "DATABASE" ? "DATABASE RECORD" : "PATENT";
 
-            if (rawStatus === "LIVE_API" && (rawType === "THE LENS" || rawType === "THE LENS PATENT API")) {
-              displaySource = "THE LENS";
-              defaultDocType = "PATENT";
-            } else if (rawType === "ARXIV" || patent.patent_number.startsWith("ARXIV")) {
+            const isArXivDoc =
+              rawType === "ARXIV" ||
+              patent.patent_number.toUpperCase().startsWith("ARXIV") ||
+              (patent.document_type && patent.document_type.toUpperCase().includes("NON-PATENT"));
+
+            if (isArXivDoc) {
               displaySource = "arXiv";
               defaultDocType = "NON-PATENT LITERATURE";
+            } else if (rawStatus === "LIVE_API" && (rawType === "THE LENS" || rawType === "THE LENS PATENT API")) {
+              displaySource = "THE LENS";
+              defaultDocType = "PATENT";
             } else if (rawStatus === "FALLBACK" || rawType.includes("FALLBACK") || rawType === "USPTO") {
               displaySource = rawType === "USPTO" ? "FALLBACK (USPTO)" : "FALLBACK";
               defaultDocType = "PATENT";

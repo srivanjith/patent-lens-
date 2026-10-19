@@ -243,7 +243,7 @@ async def init_mongo():
 
         from typing import Any, cast
         logger.info(f"Initializing MongoDB connection to {db_name}...")
-        mongo_client = AsyncIOMotorClient(mongo_url)
+        mongo_client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=30000, connectTimeoutMS=30000)
         await init_beanie(
             database=cast(Any, mongo_client[db_name]),
             document_models=[UserDoc, PatentDoc, SearchDoc, SavedPatentDoc, ReportDoc]
