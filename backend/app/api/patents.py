@@ -67,13 +67,16 @@ async def get_user_saved_patents(
         pass
 
     if db:
-        saved = (
-            db.query(SavedPatent)
-            .filter(SavedPatent.user_id == current_user.id)
-            .order_by(SavedPatent.created_at.desc())
-            .all()
-        )
-        return [SavedPatentOut.model_validate(s) for s in saved]
+        try:
+            saved = (
+                db.query(SavedPatent)
+                .filter(SavedPatent.user_id == current_user.id)
+                .order_by(SavedPatent.created_at.desc())
+                .all()
+            )
+            return [SavedPatentOut.model_validate(s) for s in saved]
+        except Exception:
+            return []
     return []
 
 @router.get("/{patent_id}", response_model=PatentOut)

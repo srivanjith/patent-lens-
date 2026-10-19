@@ -109,6 +109,15 @@ class VercelPathRewriteMiddleware:
                     scope["path"] = "/"
         await self.app(scope, receive, send)
 
+@app.middleware("http")
+async def ensure_db_initialized_middleware(request: Request, call_next):
+    from app.core.database import ensure_mongo_initialized
+    try:
+        await ensure_mongo_initialized()
+    except Exception as e:
+        logger.debug(f"Middleware mongo init note: {e}")
+    return await call_next(request)
+
 app.add_middleware(VercelPathRewriteMiddleware)
 
 @app.exception_handler(Exception)

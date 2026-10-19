@@ -177,13 +177,26 @@ def ensure_columns_exist(engine_instance):
     except Exception as e:
         logger.warning(f"Database column migration note: {e}")
 
-# Run schema column checks upon engine initialization (skip during fast testing imports)
+# Run schema table & column checks upon engine initialization (skip during fast testing imports)
 is_test_env = (getattr(settings, "TESTING", False) or os.getenv("TESTING", "").lower() == "true")
-if not is_test_env:
+
+def ensure_database_ready():
+    """Ensure all SQL tables exist and initial patent records are present."""
     try:
+        Base.metadata.create_all(bind=engine)
         ensure_columns_exist(engine)
+        from app.models.models import Patent
+        with SessionLocal() as session:
+            count = session.query(Patent).count()
+            if count == 0:
+                logger.info("Database has 0 patents on startup. Auto-seeding default patent records...")
+                from scripts.seed_database import seed_patents_if_needed
+                seed_patents_if_needed(db=session, force_reseed=False)
     except Exception as e:
-        logger.warning(f"Initial schema migration note: {e}")
+        logger.warning(f"Database readiness initialization note: {e}")
+
+if not is_test_env:
+    ensure_database_ready()
 
 def get_db():
     """Dependency for obtaining database sessions in FastAPI routes."""
@@ -202,10 +215,20 @@ mongo_client = None
 # Event loop captured at init_mongo() time (runs on the main asyncio thread).
 # Sync FastAPI route threads use get_app_loop() + run_coroutine_threadsafe().
 _app_event_loop = None
+_mongo_initialized = False
 
 def get_app_loop():
     """Return the main FastAPI event loop, or None if not yet initialised."""
     return _app_event_loop
+
+
+async def ensure_mongo_initialized():
+    """Idempotently ensure MongoDB is connected, safe for serverless/cold-starts."""
+    global _mongo_initialized
+    if _mongo_initialized:
+        return
+    _mongo_initialized = True
+    await init_mongo()
 
 
 async def init_mongo():
@@ -233,6 +256,7 @@ async def init_mongo():
         logger.info("MongoDB & Beanie Document ORM initialized successfully.")
     except Exception as e:
         logger.warning(f"MongoDB initialization note: {e}")
+
 
 async def close_mongo():
     global mongo_client

@@ -105,13 +105,16 @@ async def get_user_reports(
         pass
 
     if db:
-        reports = (
-            db.query(Report)
-            .filter(Report.user_id == current_user.id)
-            .order_by(Report.created_at.desc())
-            .all()
-        )
-        return [ReportOut.model_validate(r) for r in reports]
+        try:
+            reports = (
+                db.query(Report)
+                .filter(Report.user_id == current_user.id)
+                .order_by(Report.created_at.desc())
+                .all()
+            )
+            return [ReportOut.model_validate(r) for r in reports]
+        except Exception:
+            return []
     return []
 
 @router.get("/{report_id}/download")

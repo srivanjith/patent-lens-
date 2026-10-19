@@ -32,11 +32,12 @@ function getBackendUrl(): string | null {
       clean = clean.replace(/\/api$/, "");
     }
 
-    // Reject self-referential Vercel frontend URLs
-    if (clean.includes("vercel.app")) {
+    // Reject self-referential loops (only if BACKEND_URL points to the frontend host itself)
+    const currentVercelHost = (process.env.VERCEL_URL || "").trim();
+    if (currentVercelHost && clean.includes(currentVercelHost)) {
       console.error(
-        `[API Proxy] BACKEND_URL points to a vercel.app domain (${clean}). ` +
-        "This would create a self-referential loop. Set BACKEND_URL to the Render backend HTTPS URL instead."
+        `[API Proxy] BACKEND_URL points to the frontend host itself (${clean}). ` +
+        "This would create a self-referential loop. Set BACKEND_URL to your backend URL."
       );
       return null;
     }
