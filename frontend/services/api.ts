@@ -342,13 +342,9 @@ login: async (payload: any): Promise<TokenResponse> => {
           } catch {}
         }
       }
-      return generateClientMockSearchResponse({
-        title: `Search ${searchId.substring(0, 8)}`,
-        domain: "Artificial Intelligence",
-        problem_statement: "System optimization and dynamic scheduling",
-        description: "Autonomous machine learning analysis framework",
-        keywords: ["Machine Learning", "Automation"]
-      });
+      throw new Error(
+        "Could not load search results from the backend server. Please verify that the backend is running and reachable."
+      );
     }
   },
 

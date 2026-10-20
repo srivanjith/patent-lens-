@@ -1300,8 +1300,13 @@ async def perform_prior_art_search(
             matched_patents=[{"title": item["patent"].title} for item in top_10]
         )
 
-    if pat_retrieved > 0:
+    lens_records_retrieved = pat_retrieved
+    result_items = result_items_response
+
+    if (lens_records_retrieved or 0) > 0:
         active_data_source = "The Lens Patent API (Live API)"
+    elif any(getattr(r.patent, "source_type", None) == "arXiv" for r in result_items_response):
+        active_data_source = "arXiv Open Science Repository (Non-Patent Literature)"
     elif lens_status == "LENS_RATE_LIMITED":
         active_data_source = "Database Repository (Lens API HTTP 429 Rate Limited / Monthly Quota Exceeded)"
     elif lens_status == "LENS_AUTH_ERROR":

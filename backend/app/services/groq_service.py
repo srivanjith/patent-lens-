@@ -8,18 +8,20 @@ class GroqService:
     """Service for generating evidence-based patent claim examination using Groq (llama-3.3-70b-versatile)."""
 
     def __init__(self):
-        self.api_key = settings.GROQ_API_KEY
-        self.model_name = settings.GROQ_MODEL or "openai/gpt-oss-120b"
+        key = getattr(settings, "GROQ_API_KEY", "")
+        self.api_key = (key or "").strip()
+        self.model_name = settings.GROQ_MODEL or "qwen/qwen3.8-27b"
 
         self.client = None
         self._initialize_client()
 
     def _initialize_client(self):
-        api_key = settings.GROQ_API_KEY
+        api_key = self.api_key or getattr(settings, "GROQ_API_KEY", "")
         if api_key and len(api_key.strip()) > 10 and not api_key.startswith("your_"):
+            self.api_key = api_key.strip()
             try:
                 from groq import Groq
-                self.client = Groq(api_key=api_key.strip())
+                self.client = Groq(api_key=self.api_key)
                 logger.info(f"Groq client initialized for model '{self.model_name}'.")
             except Exception as e:
                 logger.warning(f"Could not load groq client: {e}")

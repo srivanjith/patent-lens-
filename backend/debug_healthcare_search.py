@@ -1,5 +1,6 @@
 import os
 import sys
+import asyncio
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -12,7 +13,7 @@ from app.models.models import User, Patent
 from app.schemas.schemas import PriorArtSearchRequest
 from app.api.search import perform_prior_art_search
 
-def run_debug_healthcare():
+async def run_debug_healthcare():
     print("Starting debug healthcare script...", flush=True)
     db = SessionLocal()
     try:
@@ -46,7 +47,7 @@ def run_debug_healthcare():
         )
 
         print("Executing perform_prior_art_search with wearable healthcare input...")
-        response = perform_prior_art_search(request=req, current_user=user, db=db)
+        response = await perform_prior_art_search(request=req, current_user=user, db=db)
         print(f"\nSearch ID: {response.search_id}")
         print(f"Total Results: {len(response.results)}")
         pm = response.summary.pipeline_metrics if response.summary else None
@@ -66,4 +67,4 @@ def run_debug_healthcare():
         db.close()
 
 if __name__ == "__main__":
-    run_debug_healthcare()
+    asyncio.run(run_debug_healthcare())

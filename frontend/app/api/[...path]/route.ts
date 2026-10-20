@@ -359,10 +359,13 @@ async function handleMockFallback(subPath: string, req: NextRequest) {
     if (mockSearchStore.has(id)) {
       return NextResponse.json(mockSearchStore.get(id));
     }
-    const resp = generateMockSearchResponse({ title: `Demonstration Analysis ${id.substring(0, 8)}` });
-    resp.search_id = id;
-    mockSearchStore.set(id, resp);
-    return NextResponse.json(resp);
+    return NextResponse.json(
+      {
+        error: "SEARCH_NOT_FOUND",
+        message: "Search record not found or backend service is offline. Please ensure the backend is running."
+      },
+      { status: 404 }
+    );
   }
 
   if (cleanPath.startsWith("patents/saved")) {

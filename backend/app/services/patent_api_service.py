@@ -22,7 +22,8 @@ class PatentAPIService:
     """
 
     def __init__(self):
-        self.api_key = getattr(settings, "PATENTS_API_KEY", "")
+        key = getattr(settings, "PATENTS_API_KEY", "")
+        self.api_key = (key or "").strip()
         self.provider = getattr(settings, "PATENTS_API_PROVIDER", "patentsview").lower()
         self.max_results = getattr(settings, "MAX_EXTERNAL_API_RESULTS", 100)
 
@@ -122,7 +123,9 @@ class PatentAPIService:
         if not is_testing:
             logger.info("[PATENT API] Fetching non-patent literature from arXiv Open Feed...")
             api_requests_attempted += 1
-            arxiv_records, arxiv_ok, arxiv_status = self._fetch_from_arxiv(title, keywords, domain, limit=15)
+            # If Lens already retrieved patent candidates, limit arXiv to only 3 supplementary literature records
+            arxiv_limit = 3 if len(raw_candidates) >= 10 else 15
+            arxiv_records, arxiv_ok, arxiv_status = self._fetch_from_arxiv(title, keywords, domain, limit=arxiv_limit)
             if arxiv_ok:
                 api_requests_succeeded += 1
                 api_records_returned += len(arxiv_records)

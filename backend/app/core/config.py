@@ -5,6 +5,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_FILE_PATH = BASE_DIR / ".env"
 
 
+
+
 class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
@@ -45,7 +47,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.8-flash"
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "openai/gpt-oss-20b"
+    GROQ_MODEL: str = "qwen/qwen3.8-27b"
 
 
     # External Patent APIs Configuration

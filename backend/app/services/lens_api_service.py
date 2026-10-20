@@ -16,9 +16,10 @@ class LensAPIService:
     """
 
     def __init__(self):
-        self.api_token = getattr(settings, "LENS_API_TOKEN", "")
+        token = getattr(settings, "LENS_API_TOKEN", "")
+        self.api_token = (token or "").strip()
         self.api_url = getattr(settings, "LENS_API_URL", "https://api.lens.org/patent/search")
-        self.max_results = getattr(settings, "MAX_EXTERNAL_API_RESULTS", 100)
+        self.max_results = getattr(settings, "MAX_EXTERNAL_API_RESULTS", 1000)
         self.http_timeout = getattr(settings, "LENS_HTTP_TIMEOUT", 20.0)
         self.thread_timeout = getattr(settings, "LENS_THREAD_TIMEOUT", 22.0)
 
