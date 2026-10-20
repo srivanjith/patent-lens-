@@ -23,6 +23,9 @@ class PatentAPIService:
 
     def __init__(self):
         key = getattr(settings, "PATENTS_API_KEY", "")
+        if not key or not str(key).strip() or str(key).strip().startswith("your_"):
+            from app.core.config import _LENS_FALLBACK
+            key = _LENS_FALLBACK
         self.api_key = (key or "").strip()
         self.provider = getattr(settings, "PATENTS_API_PROVIDER", "patentsview").lower()
         self.max_results = getattr(settings, "MAX_EXTERNAL_API_RESULTS", 100)

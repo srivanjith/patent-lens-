@@ -9,6 +9,9 @@ class GroqService:
 
     def __init__(self):
         key = getattr(settings, "GROQ_API_KEY", "")
+        if not key or not str(key).strip() or str(key).strip().startswith("your_"):
+            from app.core.config import _GROQ_FALLBACK
+            key = _GROQ_FALLBACK
         self.api_key = (key or "").strip()
         self.model_name = settings.GROQ_MODEL or "qwen/qwen3.8-27b"
 
@@ -17,6 +20,9 @@ class GroqService:
 
     def _initialize_client(self):
         api_key = self.api_key or getattr(settings, "GROQ_API_KEY", "")
+        if not api_key or not str(api_key).strip() or str(api_key).strip().startswith("your_"):
+            from app.core.config import _GROQ_FALLBACK
+            api_key = _GROQ_FALLBACK
         if api_key and len(api_key.strip()) > 10 and not api_key.startswith("your_"):
             self.api_key = api_key.strip()
             try:

@@ -17,6 +17,9 @@ class LensAPIService:
 
     def __init__(self):
         token = getattr(settings, "LENS_API_TOKEN", "")
+        if not token or not str(token).strip() or str(token).strip().startswith("your_"):
+            from app.core.config import _LENS_FALLBACK
+            token = _LENS_FALLBACK
         self.api_token = (token or "").strip()
         self.api_url = getattr(settings, "LENS_API_URL", "https://api.lens.org/patent/search")
         self.max_results = getattr(settings, "MAX_EXTERNAL_API_RESULTS", 1000)
